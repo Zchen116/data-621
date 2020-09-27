@@ -1,0 +1,294 @@
+---
+title: "Predicting Baseball Wins using Multiple Linear Regression"
+subtitle: "DATA621 Homework 01"
+author: "William Outcault, Kevin Potter, Mengqin Cai, Philip Tanofsky, Robert Welk, Zhi Ying Chen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: pdf_document
+---
+
+# Assignment
+
+In this homework assignment, you will explore, analyze and model a data set containing approximately 2200 records. Each record represents a professional baseball team from the years 1871 to 2006 inclusive. Each record has the performance of the team for the given year, with all of the statistics adjusted to match the performance of a 162 game season.
+
+We have been given a dataset with 2276 records summarizing a major league baseball team's season. The records span 1871 to 2006 inclusive. All statistics have been adjusted to match the performance of a 162 game season.
+
+Your objective is to build a multiple linear regression model on the training data to predict the number of wins for the team. You can only use the variables given to you (or variables that you derive from the variables provided). 
+
+---
+
+\newpage
+
+# DATA EXPLORATION
+
+```{r, include=F}
+library(recommenderlab)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(Metrics) 
+library(kableExtra)
+library(gridExtra)
+library(rmdformats)
+library(caTools)
+library(formattable)
+library(mice)
+library(naniar)
+library(reshape)
+library(corrplot)
+library(caret)
+library(knitr)
+library(scales)
+library(gplots)
+library(MASS)
+```
+
+
+Before modeling it’s important you understand your data. The following cells use exploratory data methods to understand the distribution of the data. The techniques used will explore differences feature type, summary statistics, number of missing values, and a visual representation of the density of each variable. 
+
+```{r}
+# Load dataframes without index column
+raw_mbed <- read.csv("https://raw.githubusercontent.com/Zchen116/data-621/master/moneyball-evaluation-data.csv")
+raw_mbtd <- read.csv("https://raw.githubusercontent.com/Zchen116/data-621/master/moneyball-training-data.csv")
+mbed <- raw_mbed[,-1]
+mbtd <- raw_mbtd[,-1]
+```
+
+```{r}
+# Check variable types
+sapply(mbtd, class)
+```
+
+
+```{r}
+# Summarize variables
+summary(mbtd)
+```
+
+```{r, warning=F}
+# Plot distributions
+par(mfrow = c(4, 4))
+
+datasub = melt(mbtd)
+ggplot(datasub, aes(x= value)) + 
+    geom_density(fill='red') + facet_wrap(~variable, scales = 'free') 
+```
+
+\newpage
+
+```{r}
+# Show missing values
+vis_miss(mbtd)
+```
+
+
+Let's go piece by piece through the information we uncovered.
+
+**Variable Type**: We are dealing with only numerical types.\
+**Summary**: We have zero values which doesn't seem feasible within the context of the analysis.\
+**Distributions**: We have bimodal and skewed distributions.\
+**Missing Values**: The `TEAM_BATTING_HBP` and `TEAM_BASERUN_CS` variables are each missing over a third of their values.\
+
+
+
+---
+
+\newpage
+
+# Data Preparation
+
+We begin by splitting the data into a training and testing set using a 75/25 split. Next each zero value is set to NA because zero is not exactly feasible in this context therefore we treat the data as missing or an anomaly. Following this, the variables with over 10% missing values were removed and only the complete cases were used for the training set. Lastly we view the distributions to better understand the prepped data.
+
+```{r}
+# Split train/test data
+set.seed(100) 
+
+smp_size <- floor(0.75 * nrow(raw_mbtd))
+
+train_ind <- sample(seq_len(nrow(raw_mbtd)), size = smp_size)
+
+train <- raw_mbtd[train_ind, -1]
+test <- raw_mbtd[-train_ind, -1]
+```
+
+```{r}
+dim(train)
+```
+
+```{r}
+dim(test)
+```
+
+```{r}
+# Set 0 equal to NA
+train[train == 0] <- NA
+test[is.na(test)] <- 0
+```
+
+```{r}
+# Remove variables with excessive missing values
+train <- dplyr::select(train, -TEAM_BATTING_HBP, -TEAM_BASERUN_CS)
+test <- dplyr::select(test, -TEAM_BATTING_HBP, -TEAM_BASERUN_CS)
+```
+
+```{r}
+# Filter complete cases
+train <- train[complete.cases(train),]
+```
+
+
+```{r, warning=F}
+# Plot clean distributions
+par(mfrow = c(4, 4))
+
+datasub = melt(train)
+ggplot(datasub, aes(x= value)) + 
+    geom_density(fill='red') + facet_wrap(~variable, scales = 'free') 
+```
+
+Our distributions look much more normally distributed.
+
+--- 
+
+\newpage
+
+# Build Model
+
+After the data has been cleaned and analyzed we are ready to create a linear regression model to predict team wins. It's important to note we are only using the training data to create our best fit line. We use the testing data set to evaluate the model on unseen data and prevent overfitting. The following cells explore three methods for creating a model. 
+
+```{r include = F}
+set_constraints <- function(predictions){
+  
+  predictions[predictions < 0] <- 0
+
+  predictions[predictions > 162] <- 162
+  
+  predictions
+  
+}
+```
+
+
+## Raw Model
+
+The raw model is our base for evaluation. The raw model uses the base `lm` package to create the best fit line. We fit the model on the training dataset using all of the features that met the data preparation criteria and evaluate the performance. 
+
+```{r}
+# Build stepwise model
+raw_model <- lm(TARGET_WINS ~ ., 
+            data = train)
+```
+
+```{r}
+par(mfrow = c(2, 2))
+plot(raw_model)
+```
+
+\newpage
+
+```{r}
+summary(raw_model)
+```
+
+```{r}
+#Calculate RMSE and R.Squared
+predictions <- predict.lm(raw_model, newdata = test[,-1])
+
+rmse <- rmse(test[,1], predictions)
+
+R.sq <- summary(raw_model)$adj.r.squared
+
+raw <- cbind(rmse, R.sq)
+raw
+```
+
+\newpage
+
+# Stepwise Model
+
+This model uses the raw model created above with the addition of the `stepAIC` package. `stepAIC` is a common package used to help with feature selection. This version of the model uses this package with no additional constraints to train and evaluate model performance.
+
+```{r}
+stepwise_model <- stepAIC(raw_model, direction = c("both"), trace = FALSE)
+```
+
+```{r}
+par(mfrow = c(2, 2))
+plot(stepwise_model)
+```
+
+\newpage
+
+```{r}
+summary(stepwise_model)
+```
+
+```{r}
+#Calculate RMSE and R.Squared
+predictions2 <- predict.lm(stepwise_model, newdata = test[,-1])
+
+rmse2 <- rmse(test[,1], predictions2)
+
+R.sq2 <- summary(stepwise_model)$adj.r.squared
+
+stepwise <- cbind(rmse2, R.sq2)
+
+stepwise
+```
+
+\newpage
+
+## Stepwise with Constraints
+
+Here we add constraints to the stepwise model created to tune model performance. Tuning a model is a technique used in data science to direct the model to adjust the feature weights to minimize a specific loss function. In this case we use RMSE (root-mean-square deviation).
+
+```{r}
+#Calculate RMSE and R.Squared
+predictions2 <- set_constraints(predictions2)
+
+rmse3 <- rmse(test[,1], predictions2)
+
+R.sq3 <- summary(stepwise_model)$adj.r.squared
+
+constrained_stepwise <- cbind(rmse3, R.sq3)
+
+constrained_stepwise
+```
+
+---
+
+\newpage
+
+# Select Model
+
+Lastly all the models will be compared in order to select the model that will produce the most accurate and precise results. The metrics we will be focused on are RMSE and adjusted R-Squared. The models compared were the original raw model which included all variables. Next was a stepwise model which minimizes AIC in order to determine the variables which are necessary to include. The last model was a stepwise model with constraints implemented on the predictions.
+
+```{r}
+kk = rbind(round(raw, 4), round(stepwise, 4), round(constrained_stepwise, 4))
+k1 = as.data.frame(kk)
+rownames(k1) = c("raw", "stepwise", "constrained_stepwise")
+k1 %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c('striped','bordered'), full_width = FALSE) 
+```
+
+Our third model produced the best metrics. Including constraints on a stepwise model produced an RMSE and adjusted R-squared of `r kk[3,1]` and `r kk[3,2]` respectively.
+
+```{r}
+preds <- cbind(head(predictions2, 10), head(test[,1], 10))
+
+k2 = as.data.frame(preds)
+colnames(k2) = c("Predictions", "Actual")
+k2 %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c('striped','bordered'), full_width = FALSE) 
+```
+
+## Write Predictions
+
+```{r}
+mbed[is.na(mbed)]<-0
+final_predictions <- round(predict.lm(stepwise_model, newdata = mbed), 3)
+final_predictions <- set_constraints(final_predictions)
+final_predictions <- cbind(TARGET_WINS=final_predictions, mbed)
+write.csv(final_predictions, "moneyball-prediction-data.csv")
+```
