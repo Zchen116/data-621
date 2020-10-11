@@ -1,0 +1,280 @@
+---
+title: "Data621_HW2"
+author: "William Outcault, Kevin Potter, Mengqin Cai, Philip Tanofsky, Robert Welk, Zhi Ying Chen"
+date: "10/6/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(caret)
+library(pROC)
+library(knitr)
+
+```
+
+## Questions 1
+Download the classification output data set (attached in Blackboard to the assignment).
+
+```{r}
+df<-read.csv("https://raw.githubusercontent.com/DaisyCai2019/NewData/master/classification-output-data.csv")
+head(data)
+```
+
+## Questions 2
+
+The data set has three key columns we will use:
+class: the actual class for the observation
+scored.class: the predicted class for the observation (based on a threshold of 0.5)
+scored.probability: the predicted probability of success for the observation
+Use the table() function to get the raw confusion matrix for this scored dataset. Make sure you understand the output. In particular, do the rows represent the actual or predicted class? The columns?
+
+```{r}
+df.subset <- df %>% select(class, scored.class, scored.probability)
+df.subset$class <- as.factor(df.subset$class)
+df.subset$scored.class <- as.factor(df.subset$scored.class)
+```
+After setting the column values to factors we can use the table function with the actual class values shown
+in the rows and predicted class values shown in the columns. The threshold used to make the predictions
+was 0.5.
+
+```{r}
+table(df.subset$scored.class,df.subset$class)
+
+```
+
+The row represent the predicted data and columns represent the actual data.
+
+
+## Questions 3
+
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the accuracy of the predictions.
+
+$Accuracy=\frac{TP+TN}{TP+FP+TN+FN}$
+
+
+```{r}
+calculate_prediction_accuracy <- function(df){
+tabl <- table(df$class, df$scored.class)
+num <- tabl[1]+tabl[4]
+den <- sum(tabl)
+return(num/den)
+}
+calculate_prediction_accuracy(df)
+```
+
+## Questions 4
+
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the classification error rate of the predictions.
+
+$Classification Error Rate= \frac{FP+FN}{TP+FP+TN+FN}$
+
+```{r}
+calculate_class_error_rate <- function(df){
+tabl <- table(df$class, df$scored.class)
+num <- tabl[2]+tabl[3]
+den <- sum(tabl)
+return(num/den)
+}
+calculate_class_error_rate(df)
+
+
+```
+
+Verify that you get an accuracy and an error rate that sums to one.
+
+```{r}
+calculate_class_error_rate(df) + calculate_prediction_accuracy(df) == 1
+
+```
+
+
+## Questions 5
+
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the precision of the predictions. 
+
+$Precision=\frac{TP}{TP+FP}$
+
+```{r}
+calculate_prediction_precision <- function(df){
+tabl <- table(df$class, df$scored.class)
+num <- tabl[4]
+den <- tabl[4] + tabl[3]
+return(num/den)
+}
+calculate_prediction_precision(df)
+```
+
+## Questions 6
+
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the sensitivity of the predictions. Sensitivity is also known as recall.
+
+$Sensitivity =\frac{TP}{TP+FN}$
+
+```{r}
+calculate_prediction_sensitivity <- function(df){
+tabl <- table(df$class, df$scored.class)
+num <- tabl[4]
+den <- tabl[4] + tabl[2]
+return(num/den)
+}
+calculate_prediction_sensitivity(df)
+
+```
+
+## Questions 7
+
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the specificity of the predictions.
+
+$Specificity=\frac {TN}{TN+FP}$
+
+
+```{r}
+calculate_prediction_specificity <- function(df){
+tabl <- table(df$class, df$scored.class)
+num <- tabl[1]
+den <- tabl[1] + tabl[3]
+return(num/den)
+}
+calculate_prediction_specificity(df)
+```
+
+## Questions 8
+
+Write a function that takes the data set as a dataframe, with actual and predicted classifications identified, and returns the F1 score of the predictions.
+
+$F1 Score=\frac{2*Precision*Sensitivity}{Precision+Sensitivity}$
+
+```{r}
+f1_score <- function(df){
+(2*calculate_prediction_precision(df)*calculate_prediction_sensitivity(df))/(calculate_prediction_precision(df)+calculate_prediction_sensitivity(df))
+}
+f1_score(df)
+
+```
+
+## Questions 9
+
+Before we move on, let’s consider a question that was asked: What are the bounds on the F1 score? Show that the F1 score will always be between 0 and 1.(Hint: If 0<a<1 and 0<b<1 then ab<a)
+
+$F1 Score=\frac{2*Precision*Sensitivity}{Precision+Sensitivity}$. From Question 5 and 6, we know that 0<Precision<1 and 0<Sensitivity<1. We assume a=Precision and b=Sensitivity, so $F1 Score=\frac {2ab}{a+b}$.
+
+```{r}
+# set seed
+set.seed(1234)
+
+# number of random variables to generate
+n <- 1000
+
+# generate n random variables between 0 and 1 
+x <- runif(n,0,1)
+y <- runif(n,0,1)
+
+# matrix to store the results
+z <- matrix(NA, nrow=n, ncol=n)
+
+# for loop to get all possible combinations of x and y
+for(i in 1:length(x)){
+  for(j in 1:length(y)){
+    z[i,j] <- (2*x[i]*y[j])/(x[i]+y[j]) #calculate and store F1 score
+  }
+}
+
+# show that values fall between 0 and 1 
+range(z)
+min(z) > 0 
+max(z) < 1
+
+```
+The result show the max of F1 Score is less than 1 and larger than 0. 
+
+
+## Questions 10
+
+Write a function that generates an ROC curve from a data set with a true classification column (class in our example) and a probability column (scored.probability in our example). Your function should return a list that includes the plot of the ROC curve and a vector that contains the calculated area under the curve (AUC). Note that I recommend using a sequence of thresholds ranging from 0 to 1 at 0.01 intervals.
+
+
+```{r}
+ROC = function(class, probability){
+class = class[order(probability, decreasing=TRUE)]
+result =data.frame(TPR=cumsum(class)/sum(class), FPR=cumsum(!class)/sum(!class), class)
+FPR_df = c(diff(result$FPR), 0)
+TPR_df = c(diff(result$TPR), 0)
+AUC = round(sum(result$TPR * FPR_df) + sum(TPR_df * FPR_df)/2,4)
+plot(result$FPR,result$TPR,type="l",main ="ROC Curve",ylab="Sensitivity",xlab="1-Specificity")
+abline(a=0,b=1)
+legend(.6,.2,AUC,title = "AUC")
+}
+ROC(df$class,df$scored.probability)
+
+```
+
+
+
+## Questions 11
+
+Use your created R functions and the provided classification output data set to produce all of the classification metrics discussed above.
+
+```{r}
+metrics <- c(calculate_prediction_accuracy(df), calculate_class_error_rate(df), calculate_prediction_precision(df), calculate_prediction_sensitivity(df), calculate_prediction_specificity(df), f1_score(df))
+names(metrics) <- c("Accuracy", "Classification Error Rate", "Precision", "Sensitivity", "Specificity", "F1 Score")
+kable(metrics, col.names = "Metrics")
+
+```
+
+
+## Questions 12
+
+Investigate the caret package. In particular, consider the functions confusionMatrix, sensitivity, and specificity. Apply the functions to the data set. How do the results compare with your own functions?
+
+```{r}
+library(e1071)
+```
+
+```{r}
+df$scored.class <- as.factor(df$scored.class)
+df$class <- as.factor(df$class)
+```
+
+```{r}
+confusionMatrix(df$scored.class, df$class, mode = 'everything')
+```
+
+```{r}
+sensitivity(df$scored.class, df$class)
+```
+
+```{r}
+specificity(df$scored.class, df$class)
+```
+
+The values from the built in function are almost the same with the function we created before.
+
+## Questions 13
+
+Investigate the pROC package. Use it to generate an ROC curve for the data set. How do the results compare with your own functions?
+
+```{r}
+roc_new <- roc(df$class, df$scored.probability)
+plot(roc_new, main="ROC Curve for Classification data", print.auc = TRUE) 
+```
+
+
+The ROC graphs from the pROC package and the one we generate are very similar. 
+
+
+
+
+
+
+
