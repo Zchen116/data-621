@@ -1,0 +1,849 @@
+---
+title: "Business Analytics and Data Mining"
+subtitle: "DATA621 Homework 03"
+author: "William Outcault, Kevin Potter, Mengqin Cai, Philip Tanofsky, Robert Welk, Zhi Ying Chen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The assignment attempts to predict whether a given neighborhood near a big city is at risk for a high crime rate. The project first provides an initial data exploration of the 12 predictor variables and the one categorical target variable. The data exploration step provides insight into which variables provide a higher level of correlation with the target variable. Due to the binary, categorical nature of the target variable, a binary logistic regression model is required to make proper predictions. Several binary logistic regression models are constructed and evaluated to determine the best performing model on the training data. Once selected, the best-performing binary logistic regression model is used to predict the classification and probabilities on the evaluation data set.
+
+```{r, include=F}
+library(tidyverse)
+library(mice)
+library(DataExplorer)
+library(MASS)
+library(caret)
+library(pROC)
+library(Amelia)
+library(broom)
+library(gridExtra)
+library(lmtest)
+```
+
+```{r message=F, warning=F, echo=F}
+train <- read.csv(
+  "https://raw.githubusercontent.com/Zchen116/data-621/master/crime-training-data_modified.csv") %>% 
+  as_tibble()
+
+evaluation <- read.csv(
+  "https://raw.githubusercontent.com/Zchen116/data-621/master/crime-evaluation-data_modified.csv") %>% 
+  as_tibble()
+```
+
+---
+
+\newpage
+
+# Data exploration
+
+The data fields represent crime information for various neighborhoods in a major city. Each record has a response variable indicating whether or not the crime rate is above the median crime rate (1) or below the median crime rate (0).
+
+The following exploratory data methods present a picture of the data to capture the distribution of the data and potential correlation with the target variable. The techniques used explore a summary of the variables,the distribution of each predictor variable against the target variable, density plot of each predictor variable against the target variable, along with a correlation plot across all the features.
+
+```{r message=F, warning=F}
+str(train)
+```
+
+The structure of the training data indicates 466 records with 13 variables, 12 predictor variables and one target variable (target).
+
+\newpage
+
+```{r message=F, warning=F}
+summary(train)
+```
+
+The summary table of the training data shows there are no missing values in the dataset along with the output below from the `missmap` function from the `Amelia` library.
+
+Notes on the data:
+
+- 9 predictor variables defined as continuous numbers
+- 3 predictor variables defined as integers
+- chas is a dummy variable, containing the just the values 0 and 1
+- rad is defined as an index, using integer values to define a category
+- zn is a proportion and defined as an integer between 0 and 100
+- Based on summary statistics, predictor variables appear valid given the range, median and mean.
+
+\newpage
+
+```{r message=F, warning=F}
+missmap(train, main = "Missing vs Observed Values")
+```
+
+
+\newpage
+
+### Boxplots
+
+The dodged boxplot of each variable against the target variable highlights differences between target boxes which could mean the variable is useful for prediction. A dodged boxplot without overlapping boxes likely indicates a correlation in the value of the predictor variable to the target classes.
+
+```{r message=F, warning=F, echo=F}
+train %>% 
+  gather("attribute", "value", 1:12) %>% 
+  ggplot(aes(x=value, fill=factor(target))) +
+    geom_boxplot(position = 'dodge') + 
+    facet_wrap(~attribute, scales="free") +
+    theme(legend.title=element_blank())
+```
+
+Boxplots with distinct difference: 
+
+- age
+- dis
+- indus
+- nox
+- rad
+
+
+Boxplots without distinct difference:
+
+- chas
+- lstat
+- medv
+- ptratio
+- rm
+- tax
+- zn
+
+The above plots indicate age, dis, indus, nox and rad variables are likely to be more valuable to the model.
+
+\newpage
+
+### Density plots
+
+Similar to the boxplots, the density plots are another tool to identify which predictor variables likely have a strong correlation with the target variable.
+
+```{r message=F, warning=F, echo=F}
+# density plots
+train %>% 
+  gather("attribute", "value", 1:12) %>% 
+  ggplot(aes(x=value, fill=factor(target)))+
+    geom_density(position = 'dodge', alpha=0.4)+ 
+    facet_wrap(~attribute, scales="free")  +
+    theme(legend.title=element_blank())
+```
+
+Density plots with clear distinction: 
+
+- age
+- indus
+- nox
+- ptratio
+- rad
+- tax
+
+Density plots without clear distinction:
+
+- chas
+- dis
+- lstat
+- medv
+- rm
+- zn
+
+The above density plots indicate age, indus, nox, ptratio, rad and tax variables are likely to be more valuable to the model.
+
+\newpage
+
+### Correlation plot
+
+```{r message=F, warning=F, echo=F}
+# corr matrix
+plot_correlation(na.omit(train), maxcat = 5L)
+```
+
+Variables highly correlated with the target (0.6 or greater):
+
+- indus
+- nox
+- age
+- rad
+- tax
+
+Predictor variable combinations with high correlation (0.7 or greater):
+
+- indus and nox
+- indus and tax
+- nox and age
+- rm and medv
+
+Predictor variable combinations with low correlation (-.7 or worse):
+
+- indus and dis
+- nox and dis
+- age and dis
+- lstat and medv
+
+Based on the high correlation values with the target variable, the predictor variables of indus, nox, age, rad and tax are expected to be valuable to the model.
+
+\newpage
+
+# Data Preparation
+Without any missing values in the predictor variables, no obvious data transformations are present. After performing additional research, the team concludes the logistic regression model contains no assumption of linearity. The model is based on data from the real world, and thus the transformation or cleaning of predictor data does expect to be a better representation of the real world data.
+
+The team did attempt log transformations on several of the variables but witnesses no improvement to the model. The team has chosen to not prepare or transform the provided data in any meaningful manner.
+
+For evaluating the training model, the training data set is split into train and test sets. The training set will contain 70 percent of the initial 466 records. The test set will be used to evaluate model for accuracy, sensitivity, specificity, AUC, and F1 score.
+
+```{r message=F, warning=F}
+set.seed(1010)
+trainIndex <- createDataPartition(train$target, p = .70, 
+                                  list = FALSE, 
+                                  times = 1)
+train <- train[trainIndex,]
+test <- train[-trainIndex,]
+```
+
+---
+
+\newpage
+
+# Build Models
+
+The team created many binary logistic regression models, using both the `logit` and `probit` link functions, along with initial forays into data transformation. For each of the three models presented, the same 70 percent of the training data is used to evaluate the model and measure the predictions on the remaining 30 percent of the training data. The following sections explore the team's three primary methods for creating a model.
+
+## Raw Model
+
+The raw model simply uses all the predictor variables in order to create a baseline for evaluation. The raw model uses the `glm` function to create the generalized linear model based on the `binomial` family and the link function `logit`. The same model is also created with the `probit` link function for initial comparison.
+
+```{r message=F, warning=F}
+glm.full <- glm(target ~., data = train , family = "binomial" (link="logit"))
+glm.full.probit <- glm(target ~., data = train , family = "binomial" (link="probit"))
+summary(glm.full)
+```
+
+The output represents the raw model based on the `logit` link function. The resulting AIC for the raw model is `r glm.full$aic`. The AIC for the raw model using the `probit` link function is `r glm.full.probit$aic`.
+
+The AIC (Akaike's Information Criteria) statistic is used to compare different models to determine the best fit for the data. The AIC is based on the count of independent variables as input into the model in addition to the how well the model reproduces the data. The purpose of the AIC best-fit model is to explain the greatest amount of variation with the fewest number of independent predictor variables.
+
+Simply put, the binary logistic regression model with the lower AIC is considered better. The raw model based on the `logit` link function performs slightly better.
+
+```{r message=F, warning=F, echo=F}
+# Calculate McFaddens Psuedo R^2
+ll.null <- glm.full$null.deviance/-2
+ll.proposed <- glm.full$deviance/-2
+R2_full <-(ll.null - ll.proposed)/ll.null
+```
+
+```{r message=F, warning=F, echo=F}
+# plot the model
+predictions.full <- data.frame(prob=glm.full$fitted.values, target=train$target) %>% arrange(prob)
+predictions.full$rank <- 1:nrow(predictions.full)
+
+## marginal effects for coefficients - now the coefficients can be interpreted 
+logit_scalar <- mean(dnorm(predict(glm.full, type="link")))
+marginals.full <- logit_scalar * coef(glm.full)
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_full.probs <- predict(glm.full,type="response", newdata=test)
+glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+```
+
+#### Confusion Matrix
+
+The following confusion matrix indicates the correct prediction of 84 records and the incorrect prediction of 10 records for the 30 percent of the training data set not used to build the model.
+
+```{r message=F, warning=F, echo=F}
+# now can use the caret function
+cm.full <- confusionMatrix(factor(glm_predict.full), factor(test$target), positive='1')
+cm.full$table
+
+# ROC and AUC 
+par(pty="s")
+roc.full <- roc(test$target, glm_full.probs)
+```
+
+\newpage
+
+Before attempting to improve the raw model, the assumption of linearity is analyzed with the predictor variables from the first model. 
+
+```{r message=F, warning=F, echo=F}
+probabilities <- predict(glm.full, type='response')
+predictors <- colnames(train)
+vars <- names(glm.full$coefficients)[-1]
+
+# Bind the logit and tidying the data for plot
+train %>%
+  dplyr::select(vars) %>% 
+  mutate(logit = log(probabilities/(1-probabilities))) %>%
+  gather(key = "predictors", value = "predictor.value", -logit) %>% 
+  ggplot(aes(x=logit,y=predictor.value)) +
+    geom_point() + 
+    geom_smooth(method='loess') + 
+    theme_minimal() + 
+    facet_wrap(~predictors, scales="free_y")
+```
+
+The plots show relative linearity for variables:
+
+- age
+- indus
+- nox
+- rad
+- tax
+
+These results follow in line with the predictor variables with high correlations to the target variable found in the data exploration step.
+
+These findings provide a guide for assessing the following models based on the reduction of predictor variables.
+
+\newpage
+
+# Stepwise Model
+
+This model uses the raw model created above with the addition of the `stepAIC` function from the `MASS` package. `stepAIC` is a common package used to help with feature selection. This version of the model uses this package with no additional constraints to train and evaluate model performance.
+
+```{r message=F, warning=F}
+glm.stepwise <- glm(target ~., data=train, family = "binomial"(link="logit")) %>% 
+  stepAIC(trace=FALSE)
+summary(glm.stepwise)
+```
+
+The stepwise model produces an AIC of `r glm.stepwise$aic`.
+
+```{r message=F, warning=F, echo=F}
+# Calculate McFaddens Psuedo R^2
+ll.null <- glm.stepwise$null.deviance/-2
+ll.proposed <- glm.stepwise$deviance/-2
+R2_stepwise <-(ll.null - ll.proposed)/ll.null
+```
+
+```{r message=F, warning=F, echo=F}
+predictions.stepwise <- data.frame(prob=glm.stepwise$fitted.values, target=train$target) %>% arrange(prob)
+predictions.stepwise$rank <- 1:nrow(predictions.stepwise)
+
+## marginal effects for coefficients - now the coefficients can be interpreted 
+logit_scalar <- mean(dnorm(predict(glm.stepwise, type="link")))
+marginals.stepwise <- logit_scalar * coef(glm.stepwise)
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_stepwise.probs <- predict(glm.stepwise,type="response", newdata=test)
+glm_predict.stepwise <- ifelse(glm_stepwise.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.stepwise, test$target)
+```
+
+#### Confusion Matrix
+
+The following confusion matrix indicates the correct prediction of 85 records and the incorrect prediction of 9 records for the 30 percent of the training data set not used to build the model.
+
+```{r message=F, warning=F, echo=F}
+# now can use the caret function
+cm.stepwise <- confusionMatrix(factor(glm_predict.stepwise), factor(test$target), positive='1')
+cm.stepwise$table
+
+# ROC and AUC 
+par(pty="s")
+roc.stepwise <- roc(test$target, glm_stepwise.probs)
+```
+
+\newpage
+
+# Manual Backwards Step Model
+
+This model uses the a manual backwards stepwise approach to remove the least valuable predictor variables one at a time until the model reaches a peak AIC value. The model completes after the removal of predictor variables, chas, rm, indus, and lstat. The model, performed independently of the above `stepAIC` model, excludes the same variables as the above model along with the `lstat` variable.
+
+```{r message=F, warning=F}
+glm.back<-glm(target~.-chas, data=train,family=binomial)
+glm.back<-update(glm.back,.~.-rm, data=train,family=binomial)
+glm.back<-update(glm.back,.~.-indus, data=train,family=binomial)
+glm.back<-update(glm.back,.~.-lstat, data=train,family=binomial)
+summary(glm.back)
+```
+
+The manual backwards stepwise model produces an AIC of `r glm.back$aic`.
+
+```{r message=F, warning=F, echo=F}
+# Get McFaddens's R-squared
+ll.null <- glm.back$null.deviance/-2
+ll.proposed <- glm.back$deviance/-2
+R2_back <-(ll.null - ll.proposed)/ll.null
+
+# plot the model
+predictions.back <- data.frame(prob=glm.back$fitted.values, target=train$target) %>% arrange(prob)
+predictions.back$rank <- 1:nrow(predictions.back)
+
+
+## marginal effects for coefficients - now the coefficients can be interpreted.. ie age, 0.1% more likely to nit target 
+logit_scalar <- mean(dnorm(predict(glm.back, type="link")))
+marginals.back <- logit_scalar * coef(glm.back)
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_back.probs <- predict(glm.back,type="response", newdata=test)
+glm_predict.back <- ifelse(glm_back.probs > 0.5, '1','0')
+attach(test)
+```
+
+\newpage
+
+#### Confusion Matrix
+
+The following confusion matrix indicates the correct prediction of 83 records and the incorrect prediction of 11 records for the 30 percent of the training data set not used to build the model.
+
+```{r message=F, warning=F, echo=F}
+# now can use the caret function
+cm.back <- confusionMatrix(factor(glm_predict.back), factor(test$target), positive='1')
+cm.back$table
+
+# ROC and AUC 
+par(pty="s")
+roc.back <- roc(test$target, glm_back.probs)
+```
+
+---
+
+\newpage
+
+# Select Model
+
+All the models will be compared in order to select the model with the best fit in order to produce the most accurate results. The metrics we will be focused on are accuracy, AIC, and AUC (area under the curve). The models compared were the original raw model which included all variables. Next was a stepwise model which minimizes AIC in order to determine the variables which are necessary to include. The last model was a manual backwards stepwise model with only one variable different than the stepwise model.
+
+```{r message=F, warning=F, echo=F}
+temp <- data.frame(cm.full$overall, 
+                   cm.stepwise$overall, 
+                   cm.back$overall) %>%
+  t() %>%
+  data.frame() %>%
+  dplyr::select(Accuracy) %>%
+  mutate(`Classification Error Rate` = 1-Accuracy)
+```
+
+```{r message=F, warning=F, echo=F}
+eval <- data.frame(cm.full$byClass, 
+                   cm.stepwise$byClass,
+                   cm.back$byClass)
+eval <- data.frame(t(eval)) %>%
+  cbind(temp) %>%
+  mutate(eval = c("Full Model", "AIC Stepwise", "Manual Backwards")) 
+```
+
+```{r message=F, warning=F, echo=F}
+eval <- dplyr::select(eval, Accuracy, `Classification Error Rate`, Sensitivity, Specificity, Precision, Recall, F1)
+
+# r-squared is better for the stepwise model, which is expected
+R2.combined <- c(R2_full, R2_stepwise, R2_back)
+
+# AIC is lower in the stepwise model suggesting it is closer to the "true" model
+AIC.combined <- c(glm.full$aic, glm.stepwise$aic, glm.back$aic)
+
+# Residual Deviance are lower in the stepwise model
+DEV.combined <- c(glm.full$deviance, glm.stepwise$deviance, glm.back$deviance)
+
+# Area under the curve is slightly better for the stepwise model 
+AUC.combined <- c(roc.full$auc, roc.stepwise$auc, roc.back$auc)
+
+eval <- cbind(eval, `R Squared`=R2.combined, AIC=AIC.combined, Deviance=DEV.combined, AUC=AUC.combined)
+
+rownames(eval) = c("Full Model", "AIC Stepwise", "Manual Backwards")
+
+t_eval <- t(eval)
+colnames(t_eval) <- rownames(eval)
+rownames(t_eval) <- colnames(eval)
+
+knitr::kable(t_eval)
+```
+
+- Best AIC: AIC Stepwise
+- Best Accuracy: AIC Stepwise
+- Best AUC: Full Model
+
+The selected model is the AIC stepwise model with the highest accuracy and the lowest AIC. As the results show, the three models perform well in comparison.
+
+\newpage
+
+### Deviance Residuals
+
+To further assess the models, the deviance residuals are compared. Based on the distribution, the better model will produce deviance residuals centered at zero and more symmetrical.
+
+#### Raw Model
+
+```{r message=F, warning=F}
+summary(glm.full$residuals)
+```
+
+#### Stepwise Model
+
+```{r message=F, warning=F}
+summary(glm.stepwise$residuals)
+```
+
+#### Manual Backwards Stepwise Model
+
+```{r message=F, warning=F}
+summary(glm.back$residuals)
+```
+
+The raw model and stepwise model both produce results centered around zero.
+
+\newpage
+
+### ROC Plot
+
+The ROC plots for each of the models indicates very similar performance with the best AUC value attained by the AIC Stepwise model as noted above.
+
+```{r message=F, warning=F, echo=F}
+par(mfrow=c(2,2))
+plot(roc.full, print.auc=TRUE, main="Full Model")
+plot(roc.stepwise, print.auc=TRUE, main="AIC Stepwise")
+plot(roc.back, print.auc=TRUE, main="Manual Backwards")
+
+par(mfrow=c(1,1))
+```
+
+\newpage
+
+### Probability Plot by Target Class
+
+The plots of the probability for each targets from the initial training data set show very similar performance between the three chosen models. Each model identifies the target classification value predictably above and below the 0.5 threshold with only a few discrepancies.
+
+```{r message=F, warning=F, echo=F}
+# model plots
+p1 <- predictions.full %>% ggplot(aes(x=rank, y=prob)) + 
+  geom_point(aes(color=factor(target)), alpha=.3, shape=4, stroke=2) +
+  ggtitle("Full Model") + theme(legend.title=element_blank())
+
+p2 <- predictions.stepwise %>% ggplot(aes(x=rank, y=prob)) + 
+  geom_point(aes(color=factor(target)), alpha=.3, shape=4, stroke=2) +
+  ggtitle("AIC Stepwise") + theme(legend.title=element_blank())
+
+p3 <- predictions.back %>% ggplot(aes(x=rank, y=prob)) + 
+  geom_point(aes(color=factor(target)), alpha=.3, shape=4, stroke=2) +
+  ggtitle("Manual Backwards") + theme(legend.title=element_blank())
+
+grid.arrange(p1, p2, p3, ncol=2, nrow=2)
+```
+
+\newpage
+
+## Further Model Comparisons
+
+As the raw model and stepwise model both performed well, further comparisons are made to tease out the difference in the models.
+
+### Anova
+
+The `anova` function shows the deviance table for the generalized linear model fits for the raw model and the stepwise model. The table indicates a degrees of freedom of three less in the stepwise model along with a smaller deviance.
+
+```{r message=F, warning=F}
+anova(glm.full, glm.stepwise, test="Chisq")
+```
+
+### Likelihood Ratio Test
+
+The `lrtest` function evaluates the likelihood ratio test for the generalized linear model fits for the raw model and the stepwise model. The results show the stepwise model would not pass the p-value significance test of 0.05, which shows the two models are similar in evaluation.
+
+```{r message=F, warning=F}
+lrtest(glm.full, glm.stepwise)
+```
+
+\newpage
+
+### Variable Importance
+
+```{r message=F, warning=F, echo=F}
+mod_fit <- train(target ~ zn + nox + age + dis + rad + tax + ptratio +
+      lstat + medv,  data=train, method="glm", family="binomial")
+```
+
+The `varImp` function calculates the variable importance for each predictor variable in the stepwise model.
+
+```{r message=F, warning=F}
+varImp(mod_fit)
+```
+
+Apparently, `ptratio` provides no importance to the stepwise model.
+
+\newpage
+
+### Checking Outliers
+
+Not all outliers are influential observations. To check whether the data contains potential influential observations, the standardized residual error can be inspected. Data points with an absolute standardized residuals above 3 represent possible outliers and may deserve closer attention.
+
+```{r message=F, warning=F, echo=F}
+# check that there are no outliers 
+plot(glm.stepwise, which = 4, id.n = 3)
+```
+
+\newpage
+
+The following R code computes the standardized residuals `std.resid` and the Cook’s distance using the R function `augment` from the `broom` package.
+
+```{r message=F, warning=F}
+model.data <- augment(glm.stepwise) %>% 
+  mutate(index = 1:n()) 
+ggplot(model.data, aes(index, .std.resid)) + 
+  geom_point(aes(color = factor(target)), alpha = .5) +
+  theme_bw()
+```
+
+\newpage
+
+### Checking for Collinearity
+
+As a rule of thumb, a VIF value that exceeds greatly exceeds 5 indicates a problematic amount of collinearity. In our example of the stepwise model, there is no collinearity: all variables have a value of VIF below or just above 5.
+
+```{r message=F, warning=F, echo=F}
+#compute variance inflation factors
+car::vif(glm.stepwise)
+```
+
+## Write Predictions
+
+```{r message=F, warning=F}
+final.preds.probs <- predict(glm.stepwise,type="response", newdata=evaluation)
+final.preds <- ifelse(final.preds.probs > 0.5, '1', '0')
+
+final.preds <- cbind(target=final.preds, target_probability=final.preds.probs, evaluation)
+write.csv(final.preds, "crime-evaluation-data-final.csv")
+```
+
+Output available in file `crime-evaluation-data-final.csv`.
+
+---
+
+\newpage
+
+# Appendix
+
+R statistical programming code
+
+```{r message=F, warning=F, eval=F}
+train <- read.csv(
+  "https://raw.githubusercontent.com/Zchen116/data-621/master/crime-training-data_modified.csv") %>% 
+  as_tibble()
+
+evaluation <- read.csv(
+  "https://raw.githubusercontent.com/Zchen116/data-621/master/crime-evaluation-data_modified.csv") %>% 
+  as_tibble()
+```
+
+### Data Exploration
+
+```{r message=F, warning=F, eval=F}
+train %>% 
+  gather("attribute", "value", 1:12) %>% 
+  ggplot(aes(x=value, fill=factor(target))) +
+    geom_boxplot(position = 'dodge') + 
+    facet_wrap(~attribute, scales="free") +
+    theme(legend.title=element_blank())
+```
+
+```{r message=F, warning=F, eval=F}
+# density plots
+train %>% 
+  gather("attribute", "value", 1:12) %>% 
+  ggplot(aes(x=value, fill=factor(target)))+
+    geom_density(position = 'dodge', alpha=0.4)+ 
+    facet_wrap(~attribute, scales="free")  +
+    theme(legend.title=element_blank())
+```
+
+```{r message=F, warning=F, eval=F}
+# corr matrix
+plot_correlation(na.omit(train), maxcat = 5L)
+```
+
+### Build Models
+
+```{r message=F, warning=F, eval=F}
+# Calculate McFaddens Psuedo R^2
+ll.null <- glm.full$null.deviance/-2
+ll.proposed <- glm.full$deviance/-2
+R2_full <-(ll.null - ll.proposed)/ll.null
+```
+
+```{r message=F, warning=F, eval=F}
+# plot the model
+predictions.full <- data.frame(prob=glm.full$fitted.values, target=train$target) %>% arrange(prob)
+predictions.full$rank <- 1:nrow(predictions.full)
+
+## marginal effects for coefficients - now the coefficients can be interpreted 
+logit_scalar <- mean(dnorm(predict(glm.full, type="link")))
+marginals.full <- logit_scalar * coef(glm.full)
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_full.probs <- predict(glm.full,type="response", newdata=test)
+glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+```
+
+```{r message=F, warning=F, eval=F}
+# now can use the caret function
+cm.full <- confusionMatrix(factor(glm_predict.full), factor(test$target), positive='1')
+cm.full$table
+
+# ROC and AUC 
+par(pty="s")
+roc.full <- roc(test$target, glm_full.probs)
+```
+
+```{r message=F, warning=F, eval=F}
+probabilities <- predict(glm.full, type='response')
+predictors <- colnames(train)
+vars <- names(glm.full$coefficients)[-1]
+
+# Bind the logit and tidying the data for plot
+train %>%
+  dplyr::select(vars) %>% 
+  mutate(logit = log(probabilities/(1-probabilities))) %>%
+  gather(key = "predictors", value = "predictor.value", -logit) %>% 
+  ggplot(aes(x=logit,y=predictor.value)) +
+    geom_point() + 
+    geom_smooth(method='loess') + 
+    theme_minimal() + 
+    facet_wrap(~predictors, scales="free_y")
+```
+
+```{r message=F, warning=F, eval=F}
+# Calculate McFaddens Psuedo R^2
+ll.null <- glm.stepwise$null.deviance/-2
+ll.proposed <- glm.stepwise$deviance/-2
+R2_stepwise <-(ll.null - ll.proposed)/ll.null
+```
+
+```{r message=F, warning=F, eval=F}
+predictions.stepwise <- data.frame(prob=glm.stepwise$fitted.values, target=train$target) %>% arrange(prob)
+predictions.stepwise$rank <- 1:nrow(predictions.stepwise)
+
+## marginal effects for coefficients - now the coefficients can be interpreted 
+logit_scalar <- mean(dnorm(predict(glm.stepwise, type="link")))
+marginals.stepwise <- logit_scalar * coef(glm.stepwise)
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_stepwise.probs <- predict(glm.stepwise,type="response", newdata=test)
+glm_predict.stepwise <- ifelse(glm_stepwise.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.stepwise, test$target)
+```
+
+```{r message=F, warning=F, eval=F}
+# now can use the caret function
+cm.stepwise <- confusionMatrix(factor(glm_predict.stepwise), factor(test$target), positive='1')
+cm.stepwise$table
+
+# ROC and AUC 
+par(pty="s")
+roc.stepwise <- roc(test$target, glm_stepwise.probs)
+```
+
+```{r message=F, warning=F, eval=F}
+# Get McFaddens's R-squared
+ll.null <- glm.back$null.deviance/-2
+ll.proposed <- glm.back$deviance/-2
+R2_back <-(ll.null - ll.proposed)/ll.null
+
+# plot the model
+predictions.back <- data.frame(prob=glm.back$fitted.values, target=train$target) %>% arrange(prob)
+predictions.back$rank <- 1:nrow(predictions.back)
+
+
+## marginal effects for coefficients - now the coefficients can be interpreted.. ie age, 0.1% more likely to nit target 
+logit_scalar <- mean(dnorm(predict(glm.back, type="link")))
+marginals.back <- logit_scalar * coef(glm.back)
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_back.probs <- predict(glm.back,type="response", newdata=test)
+glm_predict.back <- ifelse(glm_back.probs > 0.5, '1','0')
+attach(test)
+```
+
+```{r message=F, warning=F, eval=F}
+# now can use the caret function
+cm.back <- confusionMatrix(factor(glm_predict.back), factor(test$target), positive='1')
+cm.back$table
+
+# ROC and AUC 
+par(pty="s")
+roc.back <- roc(test$target, glm_back.probs)
+```
+
+### Select Model
+
+```{r message=F, warning=F, eval=F}
+temp <- data.frame(cm.full$overall, 
+                   cm.stepwise$overall, 
+                   cm.back$overall) %>%
+  t() %>%
+  data.frame() %>%
+  dplyr::select(Accuracy) %>%
+  mutate(`Classification Error Rate` = 1-Accuracy)
+```
+
+```{r message=F, warning=F, eval=F}
+eval <- data.frame(cm.full$byClass, 
+                   cm.stepwise$byClass,
+                   cm.back$byClass)
+eval <- data.frame(t(eval)) %>%
+  cbind(temp) %>%
+  mutate(eval = c("Full Model", "AIC Stepwise", "Manual Backwards")) 
+```
+
+```{r message=F, warning=F, eval=F}
+eval <- dplyr::select(eval, Accuracy, `Classification Error Rate`, Sensitivity, Specificity, Precision, Recall, F1)
+
+# r-squared is better for the stepwise model, which is expected
+R2.combined <- c(R2_full, R2_stepwise, R2_back)
+
+# AIC is lower in the stepwise model suggesting it is closer to the "true" model
+AIC.combined <- c(glm.full$aic, glm.stepwise$aic, glm.back$aic)
+
+# Residual Deviance are lower in the stepwise model
+DEV.combined <- c(glm.full$deviance, glm.stepwise$deviance, glm.back$deviance)
+
+# Area under the curve is slightly better for the stepwise model 
+AUC.combined <- c(roc.full$auc, roc.stepwise$auc, roc.back$auc)
+
+eval <- cbind(eval, `R Squared`=R2.combined, AIC=AIC.combined, Deviance=DEV.combined, AUC=AUC.combined)
+
+rownames(eval) = c("Full Model", "AIC Stepwise", "Manual Backwards")
+
+t_eval <- t(eval)
+colnames(t_eval) <- rownames(eval)
+rownames(t_eval) <- colnames(eval)
+
+knitr::kable(t_eval)
+```
+
+```{r message=F, warning=F, eval=F}
+par(mfrow=c(2,2))
+plot(roc.full, print.auc=TRUE, main="Full Model")
+plot(roc.stepwise, print.auc=TRUE, main="AIC Stepwise")
+plot(roc.back, print.auc=TRUE, main="Manual Backwards")
+
+par(mfrow=c(1,1))
+```
+
+```{r message=F, warning=F, eval=F}
+# model plots
+p1 <- predictions.full %>% ggplot(aes(x=rank, y=prob)) + 
+  geom_point(aes(color=factor(target)), alpha=.3, shape=4, stroke=2) +
+  ggtitle("Full Model") + theme(legend.title=element_blank())
+
+p2 <- predictions.stepwise %>% ggplot(aes(x=rank, y=prob)) + 
+  geom_point(aes(color=factor(target)), alpha=.3, shape=4, stroke=2) +
+  ggtitle("AIC Stepwise") + theme(legend.title=element_blank())
+
+p3 <- predictions.back %>% ggplot(aes(x=rank, y=prob)) + 
+  geom_point(aes(color=factor(target)), alpha=.3, shape=4, stroke=2) +
+  ggtitle("Manual Backwards") + theme(legend.title=element_blank())
+
+grid.arrange(p1, p2, p3, ncol=2, nrow=2)
+```
+
+```{r message=F, warning=F, eval=F}
+mod_fit <- train(target ~ zn + nox + age + dis + rad + tax + ptratio +
+      lstat + medv,  data=train, method="glm", family="binomial")
+```
+
+```{r message=F, warning=F, eval=F}
+# check that there are no outliers 
+plot(glm.stepwise, which = 4, id.n = 3)
+```
+
+```{r message=F, warning=F, eval=F}
+#compute variance inflation factors
+car::vif(glm.stepwise)
+```
