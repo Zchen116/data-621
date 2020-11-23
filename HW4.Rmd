@@ -1,0 +1,1277 @@
+---
+title: "Business Analytics and Data Mining"
+author: "William Outcault, Mengqin Cai, Philip Tanofsky, Robert Welk, Zhi Ying Chen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+  html_document:
+    toc: yes
+    toc_depth: '2'
+    df_print: paged
+subtitle: DATA621 Homework 04
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=FALSE, warning = FALSE)
+```
+
+```{r include=F, message=F,warning=F}
+library(recommenderlab)
+library(tidyverse)
+library(Metrics) 
+library(kableExtra)
+library(gridExtra)
+library(rmdformats)
+library(caTools)
+library(formattable)
+library(mice)
+library(naniar)
+library(reshape)
+library(corrplot)
+library(caret)
+library(knitr)
+library(scales)
+library(gplots)
+library(MASS)
+library(pROC)
+library(Hmisc)
+library(DataExplorer)
+```
+
+# Overview
+This assignment attempts to explore, analyze and model a data set containing approximately 8000 records representing a customer at an auto insurance company. Each record has two response variables. The first response variable, TARGET_FLAG, is a 1 or a 0. A "1" means that the person was in a car crash. A zero means that the person was not in a car crash. The second response variable is TARGET_AMT. This value is zero if the person did not crash their car. But if they did crash their car, this number will be a value greater than zero.
+
+The objective is to build both a  multiple linear regression and binary logistic regression models on the training data to predict the probability that a person will crash their car and also the amount of money it will cost if the person does crash their car. 
+
+```{r message=F, warning=F, echo=F}
+# Load dataframes without index column
+raw_training <- read.csv("https://raw.githubusercontent.com/Zchen116/data-621/master/insurance_training_data.csv", na.strings = "")
+evaluation <- read.csv("https://raw.githubusercontent.com/Zchen116/data-621/master/insurance-evaluation-data.csv", na.strings = "")
+```
+
+The structure of the training data indicates 8161 records with 26 variables, 23 predictor variables and 2 target variables along with the index variable. Before diving into the data, unwanted characters in the dataset (dollar signs, commas, etc) were removed and datatypes were changed. Code for changes made to the dataset are available in the Appendix at the end of this report.
+
+```{r include=FALSE, echo=F}
+#removed special characters then converted variables to numbers for the training data
+raw_training$INCOME<-gsub("[\\$,]", "", raw_training$INCOME)
+raw_training$HOME_VAL<-gsub("[\\$,]", "", raw_training$HOME_VAL)
+raw_training$BLUEBOOK<-gsub("[\\$,]", "", raw_training$BLUEBOOK)
+raw_training$OLDCLAIM<-gsub("[\\$,]", "",raw_training$OLDCLAIM)
+raw_training$CAR_TYPE <- raw_training$CAR_TYPE %>% 
+  str_replace_all("z_","") %>% 
+  as.factor()
+raw_training$EDUCATION <- raw_training$EDUCATION %>% 
+  str_replace_all("<","") %>%
+  str_replace_all("z_","") %>% 
+  as.factor()
+raw_training$JOB <- raw_training$JOB %>% 
+  str_replace_all("z_","") %>% 
+  as.factor() 
+
+# Remove "z_" prefix for clean up
+levels(raw_training$MSTATUS)[levels(raw_training$MSTATUS)=="z_No"] <- "No"
+levels(raw_training$SEX)[levels(raw_training$SEX)=="z_F"] <- "F"
+levels(raw_training$EDUCATION)[levels(raw_training$EDUCATION)=="z_High School"] <- "High School"
+levels(raw_training$JOB)[levels(raw_training$JOB)=="z_Blue Collar"] <- "Blue Collar"
+levels(raw_training$CAR_TYPE)[levels(raw_training$CAR_TYPE)=="z_SUV"] <- "SUV"
+levels(raw_training$URBANICITY)[levels(raw_training$URBANICITY)=="Highly Urban/ Urban"] <- "Urban"
+levels(raw_training$URBANICITY)[levels(raw_training$URBANICITY)=="z_Highly Rural/ Rural"] <- "Rural"
+
+# Remove Index column
+raw_training <- raw_training[ ,-which(names(raw_training)%in% c("INDEX"))]
+
+#change datatypes
+raw_training$INCOME<-as.numeric(raw_training$INCOME)
+raw_training$PARENT1 <- as.factor(raw_training$PARENT1)
+raw_training$HOME_VAL<-as.numeric(raw_training$HOME_VAL)
+raw_training$MSTATUS <- as.factor(raw_training$MSTATUS)
+raw_training$SEX <- as.factor(raw_training$SEX)
+raw_training$EDUCATION <- as.factor(raw_training$EDUCATION)
+raw_training$JOB <- as.factor(raw_training$JOB)
+raw_training$CAR_USE <- as.factor(raw_training$CAR_USE)
+raw_training$CAR_TYPE <- as.factor(raw_training$CAR_TYPE)
+raw_training$BLUEBOOK<-as.numeric(raw_training$BLUEBOOK)
+raw_training$RED_CAR <- as.factor(raw_training$RED_CAR)
+raw_training$OLDCLAIM<-as.numeric(raw_training$OLDCLAIM)
+raw_training$REVOKED <- as.factor(raw_training$REVOKED)
+raw_training$URBANICITY <- as.factor(raw_training$URBANICITY)
+raw_training$MSTATUS <- as.factor(raw_training$MSTATUS)
+```
+
+---
+
+\newpage
+# DATA EXPLORATION
+
+The following exploratory data methods present a picture of the data to capture the distribution of the data and potential correlation with the target variable. The techniques used explore a summary of the variables,the distribution of each predictor variable against the target variable, density plot of each predictor variable against the target variable, along with a correlation plot across all the features.
+
+## Structure of Data
+```{r}
+str(raw_training)
+```
+
+Missing Values were present in several of the variables:
+
+-AGE
+-YOJ
+-CAR_AGE
+-HOME_VAL
+-INCOME
+
+## EDA for logistic regression 
+### Boxplots
+
+The dodged boxplot of each numeric variable against the target variable highlights differences between target boxes which could mean the variable is useful for prediction of the logistic model. A dodged boxplot without overlapping boxes likely indicates a correlation in the value of the predictor variable to the target classes.
+
+```{r echo=F}
+raw_training %>%
+dplyr::select_if(is.numeric) %>% 
+  gather("attribute", "value", -TARGET_FLAG) %>% 
+  ggplot(aes(x=value, fill=factor(TARGET_FLAG)))+
+    geom_boxplot(position = 'dodge')+ 
+    facet_wrap(~attribute, scales="free")
+
+```
+
+Not many of the variables show distinct differences in response value. CLM_FREQ has the largest discrepency.
+
+\newpage
+
+### Density plots
+
+Similar to the boxplots, the density plots are another tool to identify which numeric predictor variables likely have a strong correlation with the target variable, and can suggest which variables are good to include in the logistic regression model.
+
+```{r message=F, warning=F, echo=F}
+# density plots
+raw_training %>%
+  dplyr::select_if(is.numeric) %>% 
+  gather("attribute", "value", -TARGET_FLAG) %>% 
+  ggplot(aes(x=value, fill=factor(TARGET_FLAG)))+
+    geom_density(position = 'dodge', alpha=0.4)+ 
+    facet_wrap(~attribute, scales="free") 
+```
+
+The density plots show distributions that are almost identical for each variable comparing the target. Based on this visualization, none of the numeric variables would make good predictors for the logistic regression model.
+
+### Barplots
+
+Next, factor variables were evaluated for logistic regression suitability using stacked barplots
+
+```{r echo=FALSE}
+###PARENT1
+raw_training %>%
+  group_by(PARENT1, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=PARENT1, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### MSTATUS
+raw_training %>%
+  group_by(MSTATUS, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=MSTATUS, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### SEX
+raw_training %>%
+  group_by(SEX, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=SEX, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### JOB
+raw_training %>%
+  group_by(JOB, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=JOB, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### Car Type
+raw_training %>%
+  group_by(CAR_TYPE, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=CAR_TYPE, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### Education
+raw_training %>%
+  group_by(EDUCATION, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=EDUCATION, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### CAR USE
+raw_training %>%
+  group_by(CAR_USE, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=CAR_USE, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### URBANICITY
+raw_training %>%
+  group_by(URBANICITY, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=URBANICITY, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### REVOKED
+raw_training %>%
+  group_by(REVOKED, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=REVOKED, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### RED_CAR
+raw_training %>%
+  group_by(RED_CAR, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=RED_CAR, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+
+```
+
+Factor variables that might make good predictors for logistic regression:
+-PARENT1 
+-MSTATUS 
+-EDUCATION 
+-CAR_USE 
+-URBANCITY
+
+It might also be useful to combine levels for factors with more than two levels. That will be done in the Data Preparation section. 
+
+## EDA for linear regression
+For the linear regression model, only the data where a claim was actually made is analyzed (ie TARGET_FLAG=0)
+```{r echo=F}
+train.lm <- raw_training %>% filter(TARGET_FLAG==1) %>% 
+  dplyr::select(-TARGET_FLAG) 
+```
+
+### Density plots
+
+```{r echo=F}
+par(mfrow = c(3, 3))
+
+datasub = melt(raw_training)
+ggplot(datasub, aes(x= value)) + 
+    geom_density(fill='blue') + facet_wrap(~variable, scales = 'free') 
+```
+
+
+### Scatterplot matrix
+A scatterplot matrix is generated to evaluate the relationship between the numeric variables and the linear regression target. The matrix is divided over three plots for clarity.
+
+```{r echo=F}
+### Scatter plot matrix
+train.lm %>%
+  dplyr::select_if(is.numeric) %>%
+  dplyr::select(1:4) %>% 
+  pairs(lower.panel=NULL)
+
+train.lm %>%
+  dplyr::select_if(is.numeric) %>%
+  dplyr::select(c(1,5:7)) %>% 
+  pairs(lower.panel=NULL)
+
+train.lm %>%
+  dplyr::select_if(is.numeric) %>%
+  dplyr::select(c(1,8:10)) %>% 
+  pairs(lower.panel=NULL)
+```
+
+### Correlation matrix 
+Similarly, a series of correlation matrices are given to quantify the linear regression variable's relationship with the target.
+```{r echo=F}
+# corr matrix
+train.lm %>% 
+  dplyr::select(c(1,2:7)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1,7:11)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1,11:13)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1, 14:17)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1,17:20)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1,21:24)) %>% 
+plot_correlation()
+```
+
+# DATA PREPARATION
+
+Based on the EDA several steps will be taken to prepare the dataset for modeling.
+
+## Imputate missing values.
+In this case, we will impute the mean for predictor variable.
+```{r}
+raw_training$AGE[is.na(raw_training$AGE)] <- mean(raw_training$AGE, na.rm=TRUE)
+raw_training$YOJ[is.na(raw_training$YOJ)] <- mean(raw_training$YOJ, na.rm=TRUE)
+raw_training$HOME_VAL[is.na(raw_training$HOME_VAL)] <- mean(raw_training$HOME_VAL, na.rm=TRUE)
+raw_training$CAR_AGE[is.na(raw_training$CAR_AGE)] <- mean(raw_training$CAR_AGE, na.rm=TRUE)
+raw_training$INCOME[is.na(raw_training$INCOME)] <- mean(raw_training$INCOME, na.rm=TRUE)
+raw_training <- raw_training %>% na.omit()
+```
+
+## Combine levels for factors with more than two levels
+These new variables will be used in one of the models.   
+```{r echo=F}
+
+raw_training$IS_SPORTSCAR <- fct_collapse(raw_training$CAR_TYPE, YES="Sport_Car", NO=c("Minivan", "Panel Truck", "Pickup", "SUV", "Van"))
+
+raw_training$COLLEGE <- fct_collapse(raw_training$EDUCATION, YES=c("Bachelors","Masters", "PhD"), NO="High School")
+ 
+raw_training$WHITE_COLLAR <- fct_collapse(raw_training$JOB, YES=c("Clerical","Doctor", "Lawyer", "Manager", "Professional"), NO=c("Blue Collar", "Student", "Home Maker"))
+par(mfrow=c(2,2))
+### IS_SPORTSCAR
+raw_training %>%
+  group_by(IS_SPORTSCAR, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=IS_SPORTSCAR, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### COLLEGE
+raw_training %>%
+  group_by(COLLEGE, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=COLLEGE, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### WHITE_COLLAR
+raw_training %>%
+  group_by(WHITE_COLLAR, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=WHITE_COLLAR, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+
+```
+
+
+
+# BUILD MODELS
+The team created many binary logistic and linear regression models, using along with initial forays into data transformation. For each of the three models presented, the same 70 percent of the training data is used to evaluate the model and measure the predictions on the remaining 30 percent of the training data. The following sections explore the team's three primary methods for creating a model.
+```{r echo=F}
+set.seed(123)
+trainIndex <-createDataPartition(raw_training$TARGET_FLAG, p = 0.7,list = FALSE,times = 1)
+train <- raw_training[trainIndex,]
+test <- raw_training[-trainIndex,]
+```
+
+
+
+## Logistic Regression:
+Three logistic regression models were built and were evaluated based on the metrics AIC, AUC, accuracy, precision, recall, sensitivity and specificity.
+
+### Logistic Model 1: Full Model
+The raw model simply uses all the predictor variables in order to create a baseline for evaluation. The raw model uses the `glm` function to create the generalized linear model based on the `binomial` family and the link function `logit`.
+
+```{r message=F, warning=F, echo=F}
+train_flag <- train %>% dplyr::select(-c(IS_SPORTSCAR,COLLEGE,WHITE_COLLAR))
+train_flag <- train_flag[ ,-which(names(train)%in% c("TARGET_AMT", "TARGET_FLAG_FAC"))]
+
+glm.full <- glm(formula = TARGET_FLAG ~ ., data = train_flag, family = "binomial" (link="logit"))
+summary(glm.full)
+```
+
+```{r echo=F}
+## AIC
+#glm.full$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_full.probs <- predict(glm.full,type="response", newdata=test)
+glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+# now can use the caret function
+cm.full <- caret::confusionMatrix(factor(glm_predict.full), factor(test$TARGET_FLAG), positive='1')
+#cm.full$table
+
+# print metrics
+#c(cm.full$overall[c(1)], cm.full$byClass[c(1,2,5,6,7)])
+
+# ROC and AUC 
+par(pty="s")
+roc.full <- roc(train$TARGET_FLAG, glm.full$fitted.values, plot=TRUE, print.auc=TRUE)
+#glm.full$aic
+```
+
+
+The output represents the raw model based on the `logit` link function. The resulting AIC for the raw model is `r glm.full$aic`.
+
+The AIC (Akaike's Information Criteria) statistic is used to compare different models to determine the best fit for the data. The AIC is based on the count of independent variables as input into the model in addition to the how well the model reproduces the data. The purpose of the AIC best-fit model is to explain the greatest amount of variation with the fewest number of independent predictor variables.
+
+### Logistic Model 2: Manual variable selection
+For the second logistic model, variables were selected manually based on the figures provided in the Data Exploration section above.
+
+```{r echo=F}
+glm.manual <-  glm(TARGET_FLAG ~ INCOME + PARENT1 +  MSTATUS+ CAR_USE+ URBANICITY+ IS_SPORTSCAR+ COLLEGE,
+                  family = "binomial"(link="logit"), na.action=na.exclude, 
+                  data=train) 
+summary(glm.manual)
+```
+
+```{r echo=F}
+## AIC
+#glm.manual$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_manual.probs <- predict(glm.manual,type="response", newdata=test)
+glm_predict.manual <- ifelse(glm_manual.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.manual, test$TARGET_FLAG)
+
+# now can use the caret function
+cm.manual <- caret::confusionMatrix(factor(glm_predict.manual), factor(test$TARGET_FLAG), positive='1')
+#cm.manual$table
+
+# print metrics
+#c(cm.manual$overall[c(1)], cm.manual$byClass[c(1,2,5,6,7)])
+
+# ROC and AUC 
+par(pty="s")
+roc.manual <- roc(train$TARGET_FLAG, glm.manual$fitted.values, plot=TRUE, print.auc=TRUE)
+#glm.manual$aic
+```
+
+### Logistic Model 3: Stepwise Model
+This model uses the raw model created above with the addition of the `stepAIC` function from the `MASS` package. `stepAIC` is a common package used to help with feature selection. This version of the model uses this package with no additional constraints to train and evaluate model performance.
+
+```{r echo=F}
+train_flag <- train %>% dplyr::select(-c(IS_SPORTSCAR,COLLEGE,WHITE_COLLAR))
+
+
+train_flag <- train_flag[ ,-which(names(train)%in% c("TARGET_AMT", "TARGET_FLAG_FAC"))]
+glm.stepwise <- glm(TARGET_FLAG~., data = train_flag, family = "binomial"(link="logit"))%>%
+  stepAIC(trace = F)
+summary(glm.stepwise)
+```
+
+```{r echo=F}
+## AIC
+glm.stepwise$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_stepwise.probs <- predict(glm.stepwise,type="response", newdata=test)
+glm_stepwise.manual <- ifelse(glm_stepwise.probs > 0.5, '1','0')
+attach(test)
+#table(glm_stepwise.manual, test$TARGET_FLAG)
+
+# now can use the caret function
+cm.stepwise <- caret::confusionMatrix(factor(glm_stepwise.manual), factor(test$TARGET_FLAG), positive='1')
+#cm.stepwise$table
+
+# print metrics
+#c(cm.stepwise$overall[c(1)], cm.stepwise$byClass[c(1,2,5,6,7)])
+
+# ROC and AUC 
+par(pty="s")
+roc.stepwise <- roc(train$TARGET_FLAG, glm.stepwise$fitted.values, plot=TRUE, print.auc=TRUE)
+#glm.stepwise$aic
+```
+
+## Linear Regression:
+In this section models are built to try to predict the amount of claims that were made. We start by filtering out observations were there was no claim made (ie TARGET_FLAG=0). The training data decreases from 5345 cases to 1417 cases.
+```{r echo=FALSE}
+train2_claims <- train %>% filter(TARGET_FLAG == 1) %>% 
+  dplyr::select(-c(JOB,EDUCATION,CAR_TYPE))
+test_claims <- test %>% filter(TARGET_FLAG == 1) %>% 
+  dplyr::select(-c(JOB,EDUCATION,CAR_TYPE))
+```
+
+### Linear Model #1
+```{r echo=FALSE}
+linearmodel1 <- lm(TARGET_AMT ~ .-TARGET_FLAG, data = train2_claims)
+summary(linearmodel1)
+
+```
+In the full linear regression model 1, we notice that the f-statistic appeared to be significant, but r-squared value was 0.004423 which indicates poor predictive ability of the variables to the target.
+
+Other metrics to evaluate the full linear model were calculated and will be compared to second linear model in the next section.
+```{r echo=F}
+#Calculate RMSE and R.Squared for the raw model
+test_amt <- test[ ,-which(names(test)%in% c("TARGET_FLAG", "TARGET_FLAG_FAC"))]
+predictions <- predict.lm(linearmodel1, newdata = test_amt)
+rmse <-rmse(pull(test_amt, TARGET_AMT), predictions)
+R.sq <-summary(linearmodel1)$adj.r.squared
+lm.full <-cbind(rmse, R.sq)
+```
+
+### Linear Model #2
+This model uses the raw model created above with the addition of the `stepAIC` function from the `MASS` package. `stepAIC` is a common package used to help with feature selection. This version of the model uses this package with no additional constraints to train and evaluate model performance.
+
+```{r echo=F}
+linearmodel2 <- stepAIC(linearmodel1, trace = F)
+summary(linearmodel2)
+```
+In the linear regression model 2, we notice that r-squared value was 0.01217 which is also suggests a poor fit. Only two variables were determined to be significant.
+
+
+Metrics for the second model were calculated and will be evaluated in the next section.
+```{r echo=F}
+#Calculate RMSE and R.Squared for the raw model
+predictions_2 <-predict.lm(linearmodel2, newdata = test_amt)
+rmse_2 <-rmse(pull(test_amt, TARGET_AMT), predictions_2)
+R.sq_2 <-summary(linearmodel2)$adj.r.squared
+lm.stepwise <-cbind(rmse_2, R.sq_2)
+```
+
+# SELECT MODELS
+
+## Logistic Model
+All the models will be compared in order to select the model with the best fit in order to produce the most accurate results. The metrics we will be focused on are accuracy, AIC, and AUC (area under the curve). The models compared were the original raw model which included all variables. Next was a stepwise model which minimizes AIC in order to determine the variables which are necessary to include. The last model was a manual backwards stepwise model with only one variable different than the stepwise model.
+
+### Accuracy and Classicition error rate
+We see that the full model and the stepwise model perform similarly. 
+```{r message=F, warning=F, echo=F}
+temp <- data.frame(cm.full$overall, 
+                   cm.manual$overall, 
+                   cm.stepwise$overall) %>%
+  t() %>%
+  data.frame() %>%
+  dplyr::select(Accuracy) %>%
+  mutate(`Classification Error Rate` = 1-Accuracy)  
+  rownames(temp)<- c("full","manual","stepwise")
+
+```
+```{r message=F, warning=F, echo=F}
+eval <- data.frame(cm.full$byClass, 
+                   cm.manual$byClass,
+                   cm.stepwise$byClass)
+eval <- data.frame(t(eval)) %>%
+  cbind(temp) %>%
+  mutate(eval = c("Full Model", "AIC Stepwise", "Manual Backwards")) 
+rownames(eval)<- c("full","manual","stepwise")
+
+```
+
+```{r message=F, warning=F, echo=F}
+eval <- dplyr::select(eval, Accuracy, `Classification Error Rate`, Sensitivity, Specificity, Precision, Recall, F1)
+
+# AIC is lower in the stepwise model suggesting it is closer to the "true" model
+AIC.combined <- c(glm.full$aic, glm.manual$aic, glm.stepwise$aic)
+
+# Residual Deviance are lower in the stepwise model
+DEV.combined <- c(glm.full$deviance, glm.manual$deviance, glm.stepwise$deviance)
+
+# Area under the curve is slightly better for the stepwise model 
+AUC.combined <- c(roc.full$auc, roc.manual$auc, roc.stepwise$auc)
+
+eval <- cbind(eval, AIC=AIC.combined, Deviance=DEV.combined, AUC=AUC.combined)
+
+rownames(eval) = c("Full Model", "Manuallly selected", "AIC Stepwise")
+
+t_eval <- t(eval)
+colnames(t_eval) <- rownames(eval)
+rownames(t_eval) <- colnames(eval)
+
+knitr::kable(t_eval)
+```
+### Deviance residuals
+To further assess the models, the deviance residuals are compared. Based on the distribution, the better model will produce deviance residuals centered at zero and more symmetrical. There is right skew in each of the models suggesting possible outliers, but the stepwise model performs best.
+```{r message=F, warning=F, echo=F}
+bind <- rbind(summary(glm.full$residuals), summary(glm.manual$residuals), summary(glm.stepwise$residuals))
+rownames(bind)<- c("full","manual","stepwise")
+bind
+```
+
+### ROC Plot
+The ROC plots for each of the models indicates very similar performance among the models.
+```{r message=F, warning=F, echo=F}
+par(mfrow=c(2,2))
+plot(roc.full, print.auc=TRUE, main="Full Model")
+plot(roc.manual, print.auc=TRUE, main="Manual")
+plot(roc.stepwise, print.auc=TRUE, main="AIC Stepwise")
+
+par(mfrow=c(1,1))
+```
+
+The selected model is the AIC stepwise model. It performs comparably to the full model in each metric and is a better model since it contains fewer variables and avoids overfitting. 
+
+## Linear Model
+The linear models were evaluated in terms of R-squared and Root Mean Square Error(RMSE), as well as diagnostic plots that evaluate constant variance of residuals, normality of errors, homoscedasticity, and leverage of outliers.
+
+### R-squared and RMSE 
+```{r echo=FALSE}
+bind <- rbind(lm.full,lm.stepwise)
+rownames(bind) <- c("Full", "Stepwise")
+bind
+```
+### Diagnostic Plots
+```{r echo=FALSE}
+par(mfrow=c(2,2))
+plot(linearmodel1)
+```
+```{r echo=FALSE}
+par(mfrow=c(2,2))
+plot(linearmodel2)
+```
+
+The stepwise model uses performs better in RMSE, R-squared, and in all diagnostic plots and is a better model than the full model, and uses only two variables, BLUEBOOK and REVOKED. There are issues with the model - residuals are not normally distributed and only a small fraction of the target can be explained by the predictors. The variables of this dataset can be used to predict whether or not a claim will be made, but struggle with predicting how much the claim will be for.
+
+# Predictions
+Output of the logistic model is available in file `insurance_predictions_Logistic.csv`.
+Output of the linear available in file `insurance_predictions_Linear.csv`.
+```{r echo=F, include=F}
+evaluation <- evaluation[-c(1)]
+evaluation$INCOME<-gsub("[\\$,]", "", evaluation$INCOME)
+evaluation$HOME_VAL<-gsub("[\\$,]", "", evaluation$HOME_VAL)
+evaluation$BLUEBOOK<-gsub("[\\$,]", "", evaluation$BLUEBOOK)
+evaluation$OLDCLAIM<-gsub("[\\$,]", "", evaluation$OLDCLAIM)
+evaluation$CAR_TYPE <- evaluation$CAR_TYPE %>% 
+  str_replace_all("z_","") %>% 
+  as.factor()
+evaluation$EDUCATION <- evaluation$EDUCATION %>% 
+  str_replace_all("<","") %>%
+  str_replace_all("z_","") %>% 
+  as.factor()
+evaluation$JOB <- evaluation$JOB %>% 
+  str_replace_all("z_","") %>% 
+  as.factor() 
+
+evaluation$INCOME <- as.numeric(evaluation$INCOME)
+evaluation$HOME_VAL <- as.numeric(evaluation$HOME_VAL)
+evaluation$BLUEBOOK <- as.numeric(evaluation$BLUEBOOK)
+evaluation$OLDCLAIM <- as.numeric(evaluation$OLDCLAIM)
+
+evaluation$AGE<-impute(evaluation$AGE, median)
+evaluation$YOJ<-impute(evaluation$YOJ, median)
+evaluation$INCOME<-impute(evaluation$INCOME, median)
+evaluation$CAR_AGE<-impute(evaluation$CAR_AGE, median)
+
+# Remove "z_" prefix for clean up
+levels(evaluation$MSTATUS)[levels(evaluation$MSTATUS)=="z_No"] <- "No"
+levels(evaluation$SEX)[levels(evaluation$SEX)=="z_F"] <- "F"
+levels(evaluation$EDUCATION)[levels(evaluation$EDUCATION)=="z_High School"] <- "High School"
+levels(evaluation$JOB)[levels(evaluation$JOB)=="z_Blue Collar"] <- "Blue Collar"
+levels(evaluation$CAR_TYPE)[levels(evaluation$CAR_TYPE)=="z_SUV"] <- "SUV"
+levels(evaluation$URBANICITY)[levels(evaluation$URBANICITY)=="Highly Urban/ Urban"] <- "Urban"
+levels(evaluation$URBANICITY)[levels(evaluation$URBANICITY)=="z_Highly Rural/ Rural"] <- "Rural"
+
+evaluation$PTSAGE = evaluation$MVR_PTS/evaluation$AGE
+eval_results = predict(glm.stepwise, evaluation, type = 'response')
+eval_results = ifelse(eval_results > 0.5, 1, 0)
+eval_amt = predict(linearmodel2, evaluation)
+
+#write.csv(eval_results, "insurance_predictions_Logistic.csv", row.names = F)
+
+#write.csv(eval_amt, "insurance_predictions_Linear.csv", row.names = F)
+```
+
+# Appendix
+
+R statistical programming code: 
+```{r eval=F, message=F,warning=F}
+library(recommenderlab)
+library(tidyverse)
+library(Metrics) 
+library(kableExtra)
+library(gridExtra)
+library(rmdformats)
+library(caTools)
+library(formattable)
+library(mice)
+library(naniar)
+library(reshape)
+library(corrplot)
+library(caret)
+library(knitr)
+library(scales)
+library(gplots)
+library(MASS)
+library(pROC)
+library(Hmisc)
+library(DataExplorer)
+```
+
+# Overview
+This assignment attempts to explore, analyze and model a data set containing approximately 8000 records representing a customer at an auto insurance company. Each record has two response variables. The first response variable, TARGET_FLAG, is a 1 or a 0. A "1" means that the person was in a car crash. A zero means that the person was not in a car crash. The second response variable is TARGET_AMT. This value is zero if the person did not crash their car. But if they did crash their car, this number will be a value greater than zero.
+
+The objective is to build both a  multiple linear regression and binary logistic regression models on the training data to predict the probability that a person will crash their car and also the amount of money it will cost if the person does crash their car. 
+
+```{r message=F, warning=F, eval=F}
+# Load dataframes without index column
+raw_training <- read.csv("https://raw.githubusercontent.com/Zchen116/data-621/master/insurance_training_data.csv", na.strings = "")
+evaluation <- read.csv("https://raw.githubusercontent.com/Zchen116/data-621/master/insurance-evaluation-data.csv", na.strings = "")
+```
+
+The structure of the training data indicates 8161 records with 26 variables, 23 predictor variables and 2 target variables along with the index variable. Before diving into the data, unwanted characters in the dataset (dollar signs, commas, etc) were removed and datatypes were changed. Code for changes made to the dataset are available in the Appendix at the end of this report.
+
+```{r include=FALSE, eval=F}
+#removed special characters then converted variables to numbers for the training data
+raw_training$INCOME<-gsub("[\\$,]", "", raw_training$INCOME)
+raw_training$HOME_VAL<-gsub("[\\$,]", "", raw_training$HOME_VAL)
+raw_training$BLUEBOOK<-gsub("[\\$,]", "", raw_training$BLUEBOOK)
+raw_training$OLDCLAIM<-gsub("[\\$,]", "",raw_training$OLDCLAIM)
+raw_training$CAR_TYPE <- raw_training$CAR_TYPE %>% 
+  str_replace_all("z_","") %>% 
+  as.factor()
+raw_training$EDUCATION <- raw_training$EDUCATION %>% 
+  str_replace_all("<","") %>%
+  str_replace_all("z_","") %>% 
+  as.factor()
+raw_training$JOB <- raw_training$JOB %>% 
+  str_replace_all("z_","") %>% 
+  as.factor() 
+
+# Remove "z_" prefix for clean up
+levels(raw_training$MSTATUS)[levels(raw_training$MSTATUS)=="z_No"] <- "No"
+levels(raw_training$SEX)[levels(raw_training$SEX)=="z_F"] <- "F"
+levels(raw_training$EDUCATION)[levels(raw_training$EDUCATION)=="z_High School"] <- "High School"
+levels(raw_training$JOB)[levels(raw_training$JOB)=="z_Blue Collar"] <- "Blue Collar"
+levels(raw_training$CAR_TYPE)[levels(raw_training$CAR_TYPE)=="z_SUV"] <- "SUV"
+levels(raw_training$URBANICITY)[levels(raw_training$URBANICITY)=="Highly Urban/ Urban"] <- "Urban"
+levels(raw_training$URBANICITY)[levels(raw_training$URBANICITY)=="z_Highly Rural/ Rural"] <- "Rural"
+
+# Remove Index column
+raw_training <- raw_training[ ,-which(names(raw_training)%in% c("INDEX"))]
+
+#change datatypes
+raw_training$INCOME<-as.numeric(raw_training$INCOME)
+raw_training$PARENT1 <- as.factor(raw_training$PARENT1)
+raw_training$HOME_VAL<-as.numeric(raw_training$HOME_VAL)
+raw_training$MSTATUS <- as.factor(raw_training$MSTATUS)
+raw_training$SEX <- as.factor(raw_training$SEX)
+raw_training$EDUCATION <- as.factor(raw_training$EDUCATION)
+raw_training$JOB <- as.factor(raw_training$JOB)
+raw_training$CAR_USE <- as.factor(raw_training$CAR_USE)
+raw_training$CAR_TYPE <- as.factor(raw_training$CAR_TYPE)
+raw_training$BLUEBOOK<-as.numeric(raw_training$BLUEBOOK)
+raw_training$RED_CAR <- as.factor(raw_training$RED_CAR)
+raw_training$OLDCLAIM<-as.numeric(raw_training$OLDCLAIM)
+raw_training$REVOKED <- as.factor(raw_training$REVOKED)
+raw_training$URBANICITY <- as.factor(raw_training$URBANICITY)
+raw_training$MSTATUS <- as.factor(raw_training$MSTATUS)
+```
+
+---
+
+\newpage
+# DATA EXPLORATION
+
+The following exploratory data methods present a picture of the data to capture the distribution of the data and potential correlation with the target variable. The techniques used explore a summary of the variables,the distribution of each predictor variable against the target variable, density plot of each predictor variable against the target variable, along with a correlation plot across all the features.
+
+## Structure of Data
+```{r eval=F}
+str(raw_training)
+```
+
+Missing Values were present in several of the variables:
+
+-AGE
+-YOJ
+-CAR_AGE
+-HOME_VAL
+-INCOME
+
+## EDA for logistic regression 
+### Boxplots
+
+The dodged boxplot of each numeric variable against the target variable highlights differences between target boxes which could mean the variable is useful for prediction of the logistic model. A dodged boxplot without overlapping boxes likely indicates a correlation in the value of the predictor variable to the target classes.
+
+```{r eval=F}
+raw_training %>%
+dplyr::select_if(is.numeric) %>% 
+  gather("attribute", "value", -TARGET_FLAG) %>% 
+  ggplot(aes(x=value, fill=factor(TARGET_FLAG)))+
+    geom_boxplot(position = 'dodge')+ 
+    facet_wrap(~attribute, scales="free")
+
+```
+
+Not many of the variables show distinct differences in response value. CLM_FREQ has the largest discrepency.
+
+\newpage
+
+### Density plots
+
+Similar to the boxplots, the density plots are another tool to identify which numeric predictor variables likely have a strong correlation with the target variable, and can suggest which variables are good to include in the logistic regression model.
+
+```{r message=F, warning=F, eval=F}
+# density plots
+raw_training %>%
+  dplyr::select_if(is.numeric) %>% 
+  gather("attribute", "value", -TARGET_FLAG) %>% 
+  ggplot(aes(x=value, fill=factor(TARGET_FLAG)))+
+    geom_density(position = 'dodge', alpha=0.4)+ 
+    facet_wrap(~attribute, scales="free") 
+```
+
+The density plots show distributions that are almost identical for each variable comparing the target. Based on this visualization, none of the numeric variables would make good predictors for the logistic regression model.
+
+### Barplots
+Next, factor variables were evaluated for logistic regression suitability using stacked barplots
+```{r eval=FALSE}
+###PARENT1
+raw_training %>%
+  group_by(PARENT1, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=PARENT1, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### MSTATUS
+raw_training %>%
+  group_by(MSTATUS, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=MSTATUS, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### SEX
+raw_training %>%
+  group_by(SEX, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=SEX, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### JOB
+raw_training %>%
+  group_by(JOB, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=JOB, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### Car Type
+raw_training %>%
+  group_by(CAR_TYPE, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=CAR_TYPE, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### Education
+raw_training %>%
+  group_by(EDUCATION, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=EDUCATION, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### CAR USE
+raw_training %>%
+  group_by(CAR_USE, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=CAR_USE, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### URBANICITY
+raw_training %>%
+  group_by(URBANICITY, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=URBANICITY, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### REVOKED
+raw_training %>%
+  group_by(REVOKED, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=REVOKED, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### RED_CAR
+raw_training %>%
+  group_by(RED_CAR, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=RED_CAR, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+
+```
+
+Factor variables that might make good predictors for logistic regression:
+-PARENT1 
+-MSTATUS 
+-EDUCATION 
+-CAR_USE 
+-URBANCITY
+
+It might also be useful to combine levels for factors with more than two levels. That will be done in the Data Preparation section. 
+
+## EDA for linear regression
+For the linear regression model, only the data where a claim was actually made is analyzed (ie TARGET_FLAG=0)
+```{r eval=F}
+train.lm <- raw_training %>% filter(TARGET_FLAG==1) %>% 
+  dplyr::select(-TARGET_FLAG) 
+```
+
+### Density plots
+
+```{r eval=F}
+par(mfrow = c(3, 3))
+
+datasub = melt(raw_training)
+ggplot(datasub, aes(x= value)) + 
+    geom_density(fill='blue') + facet_wrap(~variable, scales = 'free') 
+```
+
+
+### Scatterplot matrix
+A scatterplot matrix is generated to evaluate the relationship between the numeric variables and the linear regression target. The matrix is divided over three plots for clarity.
+
+```{r eval=F}
+### Scatter plot matrix
+train.lm %>%
+  dplyr::select_if(is.numeric) %>%
+  dplyr::select(1:4) %>% 
+  pairs(lower.panel=NULL)
+
+train.lm %>%
+  dplyr::select_if(is.numeric) %>%
+  dplyr::select(c(1,5:7)) %>% 
+  pairs(lower.panel=NULL)
+
+train.lm %>%
+  dplyr::select_if(is.numeric) %>%
+  dplyr::select(c(1,8:10)) %>% 
+  pairs(lower.panel=NULL)
+```
+
+### Correlation matrix 
+Similarly, a series of correlation matrices are given to quantify the linear regression variable's relationship with the target.
+```{r eval=F}
+# corr matrix
+train.lm %>% 
+  dplyr::select(c(1,2:7)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1,7:11)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1,11:13)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1, 14:17)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1,17:20)) %>% 
+plot_correlation()
+
+train.lm %>% 
+  dplyr::select(c(1,21:24)) %>% 
+plot_correlation()
+```
+
+# DATA PREPARATION
+
+Based on the EDA several steps will be taken to prepare the dataset for modeling.
+
+## Imputate missing values.
+In this case, we will impute the mean for predictor variable.
+```{r eval=F}
+raw_training$AGE[is.na(raw_training$AGE)] <- mean(raw_training$AGE, na.rm=TRUE)
+raw_training$YOJ[is.na(raw_training$YOJ)] <- mean(raw_training$YOJ, na.rm=TRUE)
+raw_training$HOME_VAL[is.na(raw_training$HOME_VAL)] <- mean(raw_training$HOME_VAL, na.rm=TRUE)
+raw_training$CAR_AGE[is.na(raw_training$CAR_AGE)] <- mean(raw_training$CAR_AGE, na.rm=TRUE)
+raw_training$INCOME[is.na(raw_training$INCOME)] <- mean(raw_training$INCOME, na.rm=TRUE)
+raw_training <- raw_training %>% na.omit()
+```
+
+## Combine levels for factors with more than two levels
+These new variables will be used in one of the models.   
+```{r eval=F}
+
+raw_training$IS_SPORTSCAR <- fct_collapse(raw_training$CAR_TYPE, YES="Sport_Car", NO=c("Minivan", "Panel Truck", "Pickup", "SUV", "Van"))
+
+raw_training$COLLEGE <- fct_collapse(raw_training$EDUCATION, YES=c("Bachelors","Masters", "PhD"), NO="High School")
+ 
+raw_training$WHITE_COLLAR <- fct_collapse(raw_training$JOB, YES=c("Clerical","Doctor", "Lawyer", "Manager", "Professional"), NO=c("Blue Collar", "Student", "Home Maker"))
+par(mfrow=c(2,2))
+### IS_SPORTSCAR
+raw_training %>%
+  group_by(IS_SPORTSCAR, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=IS_SPORTSCAR, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### COLLEGE
+raw_training %>%
+  group_by(COLLEGE, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=COLLEGE, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+### WHITE_COLLAR
+raw_training %>%
+  group_by(WHITE_COLLAR, TARGET_FLAG) %>%  dplyr::summarize(n=n()) %>% mutate(freq=n/sum(n)) %>% 
+  ggplot(aes(x=WHITE_COLLAR, y=freq, fill=TARGET_FLAG)) + geom_col()
+
+
+```
+
+
+
+# BUILD MODELS
+The team created many binary logistic and linear regression models, using along with initial forays into data transformation. For each of the three models presented, the same 70 percent of the training data is used to evaluate the model and measure the predictions on the remaining 30 percent of the training data. The following sections explore the team's three primary methods for creating a model.
+```{r eval=F}
+set.seed(123)
+trainIndex <-createDataPartition(raw_training$TARGET_FLAG, p = 0.7,list = FALSE,times = 1)
+train <- raw_training[trainIndex,]
+test <- raw_training[-trainIndex,]
+```
+
+
+
+## Logistic Regression:
+Three logistic regression models were built and were evaluated based on the metrics AIC, AUC, accuracy, precision, recall, sensitivity and specificity.
+
+### Logistic Model 1: Full Model
+The raw model simply uses all the predictor variables in order to create a baseline for evaluation. The raw model uses the `glm` function to create the generalized linear model based on the `binomial` family and the link function `logit`.
+
+```{r message=F, warning=F, eval=F}
+train_flag <- train %>% dplyr::select(-c(IS_SPORTSCAR,COLLEGE,WHITE_COLLAR))
+train_flag <- train_flag[ ,-which(names(train)%in% c("TARGET_AMT", "TARGET_FLAG_FAC"))]
+
+glm.full <- glm(formula = TARGET_FLAG ~ ., data = train_flag, family = "binomial" (link="logit"))
+summary(glm.full)
+```
+
+```{r eval=F}
+## AIC
+#glm.full$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_full.probs <- predict(glm.full,type="response", newdata=test)
+glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+# now can use the caret function
+cm.full <- caret::confusionMatrix(factor(glm_predict.full), factor(test$TARGET_FLAG), positive='1')
+#cm.full$table
+
+# print metrics
+#c(cm.full$overall[c(1)], cm.full$byClass[c(1,2,5,6,7)])
+
+# ROC and AUC 
+par(pty="s")
+roc.full <- roc(train$TARGET_FLAG, glm.full$fitted.values, plot=TRUE, print.auc=TRUE)
+#glm.full$aic
+```
+
+
+The output represents the raw model based on the `logit` link function. The resulting AIC for the raw model is `r glm.full$aic`.
+
+The AIC (Akaike's Information Criteria) statistic is used to compare different models to determine the best fit for the data. The AIC is based on the count of independent variables as input into the model in addition to the how well the model reproduces the data. The purpose of the AIC best-fit model is to explain the greatest amount of variation with the fewest number of independent predictor variables.
+
+### Logistic Model 2: Manual variable selection
+For the second logistic model, variables were selected manually based on the figures provided in the Data Exploration section above.
+
+```{r eval=F}
+glm.manual <-  glm(TARGET_FLAG ~ INCOME + PARENT1 +  MSTATUS+ CAR_USE+ URBANICITY+ IS_SPORTSCAR+ COLLEGE,
+                  family = "binomial"(link="logit"), na.action=na.exclude, 
+                  data=train) 
+summary(glm.manual)
+```
+
+```{r eval=F}
+## AIC
+#glm.manual$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_manual.probs <- predict(glm.manual,type="response", newdata=test)
+glm_predict.manual <- ifelse(glm_manual.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.manual, test$TARGET_FLAG)
+
+# now can use the caret function
+cm.manual <- caret::confusionMatrix(factor(glm_predict.manual), factor(test$TARGET_FLAG), positive='1')
+#cm.manual$table
+
+# print metrics
+#c(cm.manual$overall[c(1)], cm.manual$byClass[c(1,2,5,6,7)])
+
+# ROC and AUC 
+par(pty="s")
+roc.manual <- roc(train$TARGET_FLAG, glm.manual$fitted.values, plot=TRUE, print.auc=TRUE)
+#glm.manual$aic
+```
+
+### Logistic Model 3: Stepwise Model
+This model uses the raw model created above with the addition of the `stepAIC` function from the `MASS` package. `stepAIC` is a common package used to help with feature selection. This version of the model uses this package with no additional constraints to train and evaluate model performance.
+
+```{r eval=F}
+train_flag <- train %>% dplyr::select(-c(IS_SPORTSCAR,COLLEGE,WHITE_COLLAR))
+
+
+train_flag <- train_flag[ ,-which(names(train)%in% c("TARGET_AMT", "TARGET_FLAG_FAC"))]
+glm.stepwise <- glm(TARGET_FLAG~., data = train_flag, family = "binomial"(link="logit"))%>%
+  stepAIC(trace = F)
+summary(glm.stepwise)
+```
+
+```{r eval=F}
+## AIC
+glm.stepwise$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+glm_stepwise.probs <- predict(glm.stepwise,type="response", newdata=test)
+glm_stepwise.manual <- ifelse(glm_stepwise.probs > 0.5, '1','0')
+attach(test)
+#table(glm_stepwise.manual, test$TARGET_FLAG)
+
+# now can use the caret function
+cm.stepwise <- caret::confusionMatrix(factor(glm_stepwise.manual), factor(test$TARGET_FLAG), positive='1')
+#cm.stepwise$table
+
+# print metrics
+#c(cm.stepwise$overall[c(1)], cm.stepwise$byClass[c(1,2,5,6,7)])
+
+# ROC and AUC 
+par(pty="s")
+roc.stepwise <- roc(train$TARGET_FLAG, glm.stepwise$fitted.values, plot=TRUE, print.auc=TRUE)
+#glm.stepwise$aic
+```
+
+## Linear Regression:
+In this section models are built to try to predict the amount of claims that were made. We start by filtering out observations were there was no claim made (ie TARGET_FLAG=0). The training data decreases from 5345 cases to 1417 cases.
+```{r eval=FALSE}
+train2_claims <- train %>% filter(TARGET_FLAG == 1) %>% 
+  dplyr::select(-c(JOB,EDUCATION,CAR_TYPE))
+test_claims <- test %>% filter(TARGET_FLAG == 1) %>% 
+  dplyr::select(-c(JOB,EDUCATION,CAR_TYPE))
+```
+
+### Linear Model #1
+```{r eval=FALSE}
+linearmodel1 <- lm(TARGET_AMT ~ .-TARGET_FLAG, data = train2_claims)
+summary(linearmodel1)
+
+```
+In the full linear regression model 1, we notice that the f-statistic appeared to be significant, but r-squared value was 0.004423 which indicates poor predictive ability of the variables to the target.
+
+Other metrics to evaluate the full linear model were calculated and will be compared to second linear model in the next section.
+```{r eval=F}
+#Calculate RMSE and R.Squared for the raw model
+test_amt <- test[ ,-which(names(test)%in% c("TARGET_FLAG", "TARGET_FLAG_FAC"))]
+predictions <- predict.lm(linearmodel1, newdata = test_amt)
+rmse <-rmse(pull(test_amt, TARGET_AMT), predictions)
+R.sq <-summary(linearmodel1)$adj.r.squared
+lm.full <-cbind(rmse, R.sq)
+```
+
+### Linear Model #2
+This model uses the raw model created above with the addition of the `stepAIC` function from the `MASS` package. `stepAIC` is a common package used to help with feature selection. This version of the model uses this package with no additional constraints to train and evaluate model performance.
+
+```{r eval=F}
+linearmodel2 <- stepAIC(linearmodel1, trace = F)
+summary(linearmodel2)
+```
+In the linear regression model 2, we notice that r-squared value was 0.01217 which is also suggests a poor fit. Only two variables were determined to be significant.
+
+
+Metrics for the second model were calculated and will be evaluated in the next section.
+```{r eval=F}
+#Calculate RMSE and R.Squared for the raw model
+predictions_2 <-predict.lm(linearmodel2, newdata = test_amt)
+rmse_2 <-rmse(pull(test_amt, TARGET_AMT), predictions_2)
+R.sq_2 <-summary(linearmodel2)$adj.r.squared
+lm.stepwise <-cbind(rmse_2, R.sq_2)
+```
+
+# SELECT MODELS
+
+## Logistic Model
+All the models will be compared in order to select the model with the best fit in order to produce the most accurate results. The metrics we will be focused on are accuracy, AIC, and AUC (area under the curve). The models compared were the original raw model which included all variables. Next was a stepwise model which minimizes AIC in order to determine the variables which are necessary to include. The last model was a manual backwards stepwise model with only one variable different than the stepwise model.
+
+### Accuracy and Classicition error rate
+We see that the full model and the stepwise model perform similarly. 
+```{r message=F, warning=F, eval=F}
+temp <- data.frame(cm.full$overall, 
+                   cm.manual$overall, 
+                   cm.stepwise$overall) %>%
+  t() %>%
+  data.frame() %>%
+  dplyr::select(Accuracy) %>%
+  mutate(`Classification Error Rate` = 1-Accuracy)  
+  rownames(temp)<- c("full","manual","stepwise")
+
+```
+```{r message=F, warning=F, eval=F}
+eval <- data.frame(cm.full$byClass, 
+                   cm.manual$byClass,
+                   cm.stepwise$byClass)
+eval <- data.frame(t(eval)) %>%
+  cbind(temp) %>%
+  mutate(eval = c("Full Model", "AIC Stepwise", "Manual Backwards")) 
+rownames(eval)<- c("full","manual","stepwise")
+
+```
+
+```{r message=F, warning=F, eval=F}
+eval <- dplyr::select(eval, Accuracy, `Classification Error Rate`, Sensitivity, Specificity, Precision, Recall, F1)
+
+# AIC is lower in the stepwise model suggesting it is closer to the "true" model
+AIC.combined <- c(glm.full$aic, glm.manual$aic, glm.stepwise$aic)
+
+# Residual Deviance are lower in the stepwise model
+DEV.combined <- c(glm.full$deviance, glm.manual$deviance, glm.stepwise$deviance)
+
+# Area under the curve is slightly better for the stepwise model 
+AUC.combined <- c(roc.full$auc, roc.manual$auc, roc.stepwise$auc)
+
+eval <- cbind(eval, AIC=AIC.combined, Deviance=DEV.combined, AUC=AUC.combined)
+
+rownames(eval) = c("Full Model", "Manuallly selected", "AIC Stepwise")
+
+t_eval <- t(eval)
+colnames(t_eval) <- rownames(eval)
+rownames(t_eval) <- colnames(eval)
+
+knitr::kable(t_eval)
+```
+### Deviance residuals
+To further assess the models, the deviance residuals are compared. Based on the distribution, the better model will produce deviance residuals centered at zero and more symmetrical. There is right skew in each of the models suggesting possible outliers, but the stepwise model performs best.
+```{r message=F, warning=F, eval=F}
+bind <- rbind(summary(glm.full$residuals), summary(glm.manual$residuals), summary(glm.stepwise$residuals))
+rownames(bind)<- c("full","manual","stepwise")
+bind
+```
+
+### ROC Plot
+The ROC plots for each of the models indicates very similar performance among the models.
+```{r message=F, warning=F, eval=F}
+par(mfrow=c(2,2))
+plot(roc.full, print.auc=TRUE, main="Full Model")
+plot(roc.manual, print.auc=TRUE, main="Manual")
+plot(roc.stepwise, print.auc=TRUE, main="AIC Stepwise")
+
+par(mfrow=c(1,1))
+```
+
+The selected model is the AIC stepwise model. It performs comparably to the full model in each metric and is a better model since it contains fewer variables and avoids overfitting. 
+
+## Linear Model
+The linear models were evaluated in terms of R-squared and Root Mean Square Error(RMSE), as well as diagnostic plots that evaluate constant variance of residuals, normality of errors, homoscedasticity, and leverage of outliers.
+
+### R-squared and RMSE 
+```{r eval=FALSE}
+bind <- rbind(lm.full,lm.stepwise)
+rownames(bind) <- c("Full", "Stepwise")
+bind
+```
+### Diagnostic Plots
+```{r eval=FALSE}
+par(mfrow=c(2,2))
+plot(linearmodel1)
+```
+```{r echo=FALSE}
+par(mfrow=c(2,2))
+plot(linearmodel2)
+```
+
+The stepwise model uses performs better in RMSE, R-squared, and in all diagnostic plots and is a better model than the full model, and uses only two variables, BLUEBOOK and REVOKED. There are issues with the model - residuals are not normally distributed and only a small fraction of the target can be explained by the predictors. The variables of this dataset can be used to predict whether or not a claim will be made, but struggle with predicting how much the claim will be for.
+
+# Predictions
+Output of the logistic model is available in file `insurance_predictions_Logistic.csv`.
+Output of the linear available in file `insurance_predictions_Linear.csv`.
+```{r eval=F}
+evaluation <- evaluation[-c(1)]
+evaluation$INCOME<-gsub("[\\$,]", "", evaluation$INCOME)
+evaluation$HOME_VAL<-gsub("[\\$,]", "", evaluation$HOME_VAL)
+evaluation$BLUEBOOK<-gsub("[\\$,]", "", evaluation$BLUEBOOK)
+evaluation$OLDCLAIM<-gsub("[\\$,]", "", evaluation$OLDCLAIM)
+evaluation$CAR_TYPE <- evaluation$CAR_TYPE %>% 
+  str_replace_all("z_","") %>% 
+  as.factor()
+evaluation$EDUCATION <- evaluation$EDUCATION %>% 
+  str_replace_all("<","") %>%
+  str_replace_all("z_","") %>% 
+  as.factor()
+evaluation$JOB <- evaluation$JOB %>% 
+  str_replace_all("z_","") %>% 
+  as.factor() 
+
+evaluation$INCOME <- as.numeric(evaluation$INCOME)
+evaluation$HOME_VAL <- as.numeric(evaluation$HOME_VAL)
+evaluation$BLUEBOOK <- as.numeric(evaluation$BLUEBOOK)
+evaluation$OLDCLAIM <- as.numeric(evaluation$OLDCLAIM)
+
+evaluation$AGE<-impute(evaluation$AGE, median)
+evaluation$YOJ<-impute(evaluation$YOJ, median)
+evaluation$INCOME<-impute(evaluation$INCOME, median)
+evaluation$CAR_AGE<-impute(evaluation$CAR_AGE, median)
+
+# Remove "z_" prefix for clean up
+levels(evaluation$MSTATUS)[levels(evaluation$MSTATUS)=="z_No"] <- "No"
+levels(evaluation$SEX)[levels(evaluation$SEX)=="z_F"] <- "F"
+levels(evaluation$EDUCATION)[levels(evaluation$EDUCATION)=="z_High School"] <- "High School"
+levels(evaluation$JOB)[levels(evaluation$JOB)=="z_Blue Collar"] <- "Blue Collar"
+levels(evaluation$CAR_TYPE)[levels(evaluation$CAR_TYPE)=="z_SUV"] <- "SUV"
+levels(evaluation$URBANICITY)[levels(evaluation$URBANICITY)=="Highly Urban/ Urban"] <- "Urban"
+levels(evaluation$URBANICITY)[levels(evaluation$URBANICITY)=="z_Highly Rural/ Rural"] <- "Rural"
+
+evaluation$PTSAGE = evaluation$MVR_PTS/evaluation$AGE
+eval_results = predict(glm.stepwise, evaluation, type = 'response')
+eval_results = ifelse(eval_results > 0.5, 1, 0)
+eval_amt = predict(linearmodel2, evaluation)
+
+#write.csv(eval_results, "insurance_predictions_Logistic.csv", row.names = F)
+
+#write.csv(eval_amt, "insurance_predictions_Linear.csv", row.names = F)
+```
+
+
+
