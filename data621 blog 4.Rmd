@@ -1,0 +1,65 @@
+---
+title: "Anova"
+subtitle: "DATA621 Blog 04"
+author: "Zhi Ying Chen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: pdf_document
+---
+
+ANOVA (ANalysis Of VAriance) is a statistical test to determine whether two or more population means are different. In other words, it is used to compare two or more groups to see if they are significantly different.
+
+Although ANOVA is used to make inference about means of different groups, the method is called "analysis of variance". It is called like this because it compares the "between" variance (the variance between the different groups) and the variance "within" (the variance within each group). If the between variance is significantly larger than the within variance, the group means are declared to be different. Otherwise, we cannot conclude one way or the other. The two variances are compared to each other by taking the ratio (variancebetweenvariancewithin) and then by comparing this ratio to a threshold from the Fisher probability distribution (a threshold based on a specific significance level, usually 5%).
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+```
+
+```{r}
+data(InsectSprays)
+str(InsectSprays)
+summary(InsectSprays)
+```
+A data frame with 72 observations on 2 variables.
+
+```{r}
+ggplot(InsectSprays) +
+  aes(x = count, y = spray) +
+  geom_jitter() +
+  theme(legend.position = "none")
+```
+
+```{r}
+boxplot(count ~ spray, data = InsectSprays,
+        xlab = "Type of spray", ylab = "Insect count",
+        main = "InsectSprays data", varwidth = TRUE, col = "lightgray")
+```
+
+First Model: Run One-way ANOVA in R
+```{r}
+oneway.test(count~spray, data=InsectSprays)
+```
+Default is equal variances not assumed that is Welch's correction applied and this explains why the denom df (which is k*{n-1}) is not a whole number in the output O. Oneway.test( ) corrects the non-homogeneity but doesn't give much information. So we only got F score as 36.065 and p-value is 7.999e-12. 
+
+Second Model: Run an ANOVA using aov( )
+```{r}
+Anova_Output <- aov(count ~ spray, data=InsectSprays)
+summary(Anova_Output)
+```
+
+```{r}
+opar <- par(mfrow = c(2, 2), oma = c(0, 0, 1.1, 0))
+plot(Anova_Output)
+```
+
+
+Third model
+```{r}
+Third_model <- aov(sqrt(count) ~ spray, data = InsectSprays)
+summary(Third_model)
+```
+
+```{r}
+plot(Third_model)
+```
+
