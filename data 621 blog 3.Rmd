@@ -1,0 +1,105 @@
+---
+title: "Multiple Linear Regression"
+subtitle: "DATA621 Blog 03"
+author: "Zhi Ying Chen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: pdf_document
+---
+
+Generalized linear model (GLM) is a generalization of ordinary linear regression that allows for response variables that have error distribution models other than a normal distribution like Gaussian distribution.
+
+
+In R, using lm() is a special case of glm(). lm() fits models following the form Y = Xb + e, where e is Normal (0 , s^2).
+
+glm() fits models following the form f(Y) = Xb + e. ... i.e. if you don't specify the link function and error distribution, the parameters that glm() uses produce the same effect as running lm().
+
+#Load Packages
+```{r}
+library(recommenderlab)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(Metrics) 
+library(kableExtra)
+library(gridExtra)
+library(rmdformats)
+library(caTools)
+library(formattable)
+library(mice)
+library(naniar)
+library(reshape)
+library(corrplot)
+library(caret)
+library(knitr)
+library(scales)
+library(gplots)
+library(MASS)
+library(pROC)
+```
+
+#Read Data
+```{r}
+data(airquality)
+str(airquality)
+```
+
+This provides insight telling us that airquality is a of class data.frame, the number of observation, the number of variables, and further details about each variable and the first 10 values in each column.
+
+```{r}
+head(airquality)
+```
+
+```{r}
+par(mfrow = c(3, 3))
+
+datasub = melt(airquality)
+ggplot(datasub, aes(x= value)) + 
+    geom_density(fill='red') + facet_wrap(~variable, scales = 'free') 
+```
+
+#DATA PREPARATION
+```{r}
+set.seed(100)
+ozone <- subset(na.omit(airquality), 
+        select = c("Ozone", "Solar.R", "Wind", "Temp"))
+train <- ceiling(0.7 * nrow(ozone))
+test <- nrow(ozone) - train
+trainset <- sample(seq_len(nrow(ozone)), train)
+testset <- setdiff(seq_len(nrow(ozone)), trainset)
+```
+
+#Build Models
+Model 1 - Standard linear model
+
+The simple function lm() creates a linear model of the data and will omit NAs if any automatically. For this example it suffices. Other options exists, or computations can ne one to impute the missing data, for example replacing each NA with the average (mean) of all values. The result of lm() is a slope and an intercept which describes a regression line. This can help show a trend, but it is also important to keep in mind that lm() is a simple model and that other regression methods exist.
+
+We can compute a simple regression line for the Ozone vs Temp by providing the values, as in a subset. 
+```{r}
+model1 <- lm(Ozone ~ Temp, data = ozone, subset = trainset)
+plot(model1)
+```
+
+```{r}
+summary(model1)
+```
+The model above is achieved by using the lm() function in R and the output is called using the summary() function on the model.The model above is also telling us that Adjusted R-squared is 0.4833.
+
+```{r}
+coef(model1)
+```
+
+
+
+Model 2 - we model the relationship between Ozone, Solar.R, Wind and Temp. 
+```{r}
+model2 <- lm(Ozone ~ + Solar.R + Wind + Temp, data = ozone, subset = trainset)
+plot(model2)
+summary(model2)
+```
+
+The model above is achieved by using the lm() function in R and the output is called using the summary() function on the model.The model above is also telling us that Adjusted R-squared is 0.5935.
+
+```{r}
+coef(model2)
+```
+
