@@ -1,0 +1,80 @@
+---
+title: "Scatter/ dot Plot, Histogram, and Boxplot"
+subtitle: "DATA621 Blog 01"
+author: "Zhi Ying Chen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Data Visualization
+Today's world is full of data, and we must perform proper analysis on it to obtain meaningful insights. Data visualization is not only one of most important tools can show us the graph from the data, but also as a vital tool that can dig out possible key insights from the data. If the analysis result cannot be displayed correctly, it will not be effectively communicated to the desired audience. 
+
+Pro: When you can plot the data you can has an insight into how your data its distributed or find missing values easier by just look at it on a graph. Selecting the right plot graph its also important because this can make easier to see through the data.
+
+Con: if not selecting the best visualization graph can also lead to the wrong assumptions in the analysis.
+
+Today, we are going to use Scatter/ dot Plot, Histogram, and Boxplot to visualize data, which can be to see the relationship between variables, the distribution of variables or the comparison between variables. 
+
+#Load Packages
+```{r}
+library(recommenderlab)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(kableExtra)
+library(gridExtra)
+library(rmdformats)
+library(formattable)
+library(scales)
+```
+
+#Read Data
+```{r}
+set.seed(3)
+data(iris)
+summary(iris)
+```
+
+#Data Exploration
+This data is about iris. The iris dataset (included with R), which introduced by Ronald Fisher in his 1936 paper The use of multiple measurements in taxonomic problems. It contains four measurements for 150 flowers representing three species of iris (Iris setosa, versicolor and virginica). 
+
+It is a 150 rows x 5 columns rating matrix of class 'realRatingMatrix' with 750 ratings.
+```{r}
+dim(iris)
+```
+
+#Scatter / dot plot
+```{r}
+plot(iris)
+```
+
+```{r}
+plot(iris$Petal.Length, iris$sepal.Petal.Width)
+```
+
+```{r}
+plot(iris$Sepal.Length, iris$Sepal.Width)
+```
+
+We get a matrix of scatterplots which is a correlation matrix of all the columns.And we can quickly discover the relationship between variables by merely looking at the plots drawn between them.
+
+#Histogram
+A histogram is quite similar to a bar chart except that it groups values into continuous ranges. A histogram represents the frequencies of values of a variable bucketed into ranges.
+```{r}
+hist(iris$Sepal.Width, main="Histogram of Sepal Width", col="light blue", freq=FALSE)
+```
+
+```{r}
+hist(iris$Petal.Width, main="Histogram of Petal Width", col="light green", freq=FALSE)
+```
+
+#Boxplot
+```{r}
+boxplot(iris[,0:4], main='Multiple Box plots')
+```
+
+
