@@ -1,0 +1,77 @@
+---
+title: "Linear Regression in R"
+subtitle: "DATA621 Blog 02"
+author: "Zhi Ying Chen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: pdf_document
+---
+
+Linear regression is a basic and commonly used type of predictive analysis.  The overall idea of regression is to examine two things: (1) does a set of predictor variables do a good job in predicting an outcome (dependent) variable?  (2) Which variables in particular are significant predictors of the outcome variable, and in what way do they-indicated by the magnitude and sign of the beta estimates-impact the outcome variable?  These regression estimates are used to explain the relationship between one dependent variable and one or more independent variables.  The simplest form of the regression equation with one dependent and one independent variable is defined by the formula y = c + b*x, where y = estimated dependent variable score, c = constant, b = regression coefficient, and x = score on the independent variable. The model fits a line that is closest to all observation in the dataset. The basic assumption here is that functional form is the line and it is possible to fit the line that will be closest to all observation in the dataset.
+
+#Load Packages
+```{r}
+library(MASS)
+library(ggplot2)
+library(caTools)
+```
+
+#Read Data
+```{r}
+set.seed(3)
+#Check variable types
+sapply(Boston, class)
+#Summarize variables
+summary(Boston)
+```
+
+I split Boston dataset as 80% as training set, and 20% as testing set and make the model for the training dataset. It can be seen that training dataset has 404 observations and testing dataset has 102 observations.
+```{r}
+set.seed(100)
+sample <- sample(1:nrow(Boston), 0.8*nrow(Boston))
+train = Boston[sample,]
+test = Boston[-sample,]
+dim(train)
+dim(test)
+```
+
+#Model: Simple Linear Regression Model Results
+```{r}
+model_1 = lm(medv~lstat, data=train)
+summary(model_1)
+par(mfrow=c(2,2))
+plot(model_1)
+```
+
+#Observation from summary
+1, Is there a relationship between predictor and response variables?
+
+We can answer this using F stats which defines the collective effect of all predictor variables on the response variable. In this model, F = 470 is far greater than 1, and so it can be concluded that there is a relationship between predictor and response variable.
+
+2, Is this model fit?
+
+We can answer this based on R2 (multiple-R-squared) value as it indicates how much variation is captured by the model. R2 closer to 1 indicates that the model explains the large value of the variance of the model and hence a good fit. In this case, the value is 0.539 (not really closer to 1) and hence the model may not a good fit.
+
+#Confidence Intervals and Predictions
+We want to know something about the confidence intervals of our coefficients and/or we might want to use our model to make some predictions. The confint() function Computes confidence intervals for one or more parameters in a fitted model. And the predict() function can be utilized to produce both confidence and prediction intervals for the prediction of medv for a given value of lstat.
+```{r}
+confint(model_1)
+```
+
+```{r}
+predict(model_1, data.frame(lstat=c(5,10,15,20)),interval="confidence")
+```
+
+```{r}
+predict(model_1, data.frame(lstat=c(5,10,15,20)),interval="prediction")
+```
+
+```{r}
+plot(Boston$lstat, Boston$medv)
+abline(model_1, lwd=3, col="blue")
+```
+
+#Conclusion
+The example shows how to approach linear regression modeling. The model that is created still has scope for improvement as we can apply techniques like Outlier detection, Correlation detection to further improve the accuracy of more accurate prediction.
+
+
+
