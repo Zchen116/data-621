@@ -1,0 +1,39 @@
+---
+title: "Chi-Square Test"
+subtitle: "DATA621 Blog 05"
+author: "Zhi Ying Chen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: pdf_document
+---
+
+
+Chi-Square test in R is a statistical method which used to determine if two categorical variables have a significant correlation between them. The two variables are selected from the same population. Furthermore, these variables are then categorised as Male/Female, Red/Green, Yes/No etc.
+
+Particularly in this test, I have to check the p-values. Moreover, like all statistical tests, I assume this test as a null hypothesis and an alternate hypothesis.
+
+The main thing is, I will reject the null hypothesis if the p-value that comes out in the result is less than a predetermined significance level, which is 0.05 usually, then I reject the null hypothesis.
+
+H0: The two variables are independent.
+H1: The two variables relate to each other.
+
+In the case of a null hypothesis, a chi-square test is to test the two variables that are independent.
+
+```{r}
+data("mtcars")
+```
+
+```{r}
+pairs(mtcars, main = "mtcars data", gap = 1/4)
+coplot(mpg ~ disp | as.factor(cyl), data = mtcars,
+       panel = panel.smooth, rows = 1)
+```
+
+```{r}
+table(mtcars$carb, mtcars$cyl)
+```
+
+```{r}
+chisq.test(mtcars$carb, mtcars$cyl)
+```
+
+We have a high chi-squared value and a p-value as 0.00632 which is less than 0.05 significance level. So I reject the null hypothesis and conclude that carb and cyl have a significant relationship.
