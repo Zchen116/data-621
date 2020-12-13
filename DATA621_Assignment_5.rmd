@@ -1,0 +1,828 @@
+---
+title: "Business Analytics and Data Mining"
+author: "William Outcault, Mengqin Cai, Philip Tanofsky, Robert Welk, Zhi Ying Chen"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+subtitle: DATA621 Homework 5
+---
+
+# Overview
+
+In this homework assignment, you will explore, analyze and model a data set containing information on
+approximately 12,000 commercially available wines. The variables are mostly related to the chemical properties of the wine being sold. The response variable is the number of sample cases of wine that were purchased by wine distribution companies after sampling a wine. These cases would be used to provide tasting samples to restaurants and wine stores around the United States. The more sample cases purchased, the more likely is a wine to be sold at a high end restaurant.
+
+A large wine manufacturer is studying the data in order to predict the number of wine cases ordered based upon the wine characteristics. If the wine manufacturer can predict the number of cases, then that manufacturer will be able to adjust their wine offering to maximize sales. The objective is to build a count regression model to predict the number of cases of wine that will be sold given certain properties of the wine. 
+
+Below is a short description of the variables of interest in the data set:
+
+- INDEX: Identification Variable (No theoretical effect)
+- TARGET: Number of Cases Purchased (No theoretical effect)
+- AcidIndex: Proprietary method of testing total acidity of wine by using a weighted average
+- Alcohol: Alcohol Content
+- Chlorides: Chloride content of wine
+- CitricAcid: Citric Acid Content
+- Density: Density of Wine
+- FixedAcidity: Fixed Acidity of Wine
+- FreeSulfurDioxide: Sulfur Dioxide content of wine
+- LabelAppeal: Marketing Score indicating the appeal of label design for consumers. High numbers suggest customers like the label design. Negative numbers suggest customers don't like the design.
+(Theoretical effect: Many consumers purchase based on the visual appeal of the wine label design. Higher numbers suggest better sales.)
+- ResidualSugar: Residual Sugar of wine
+- STARS Wine rating by a team of experts. 4 Stars = Excellent, 1 Star = Poor. (Theoretical effect: A high number of stars suggests high sales)
+- Sulphates: Sulfate content of wine
+- TotalSulfurDioxide: Total Sulfur Dioxide of Wine
+- VolatileAcidity: Volatile Acid content of wine
+- pH: pH of wine
+
+```{r include=F, message=F,warning=F}
+library(tidyverse)
+library(fastDummies)
+library(visdat)
+library(MASS)
+library(MLmetrics)
+library(caret)
+library(missForest)
+library(mice)
+library(pscl)
+library(AER)
+library(corrplot)
+```
+
+# Data Exploration
+
+Exploring 12,000 commercially available wines, specifically the chemical properties of the wine being sold. Dependent variable is the number of sample cases of wine purchased by wine companies after sampling.
+
+```{r echo=F}
+training_data <- read.csv("https://raw.githubusercontent.com/willoutcault/DATA621/master/homework5/wine-training-data.csv",T,",")
+eval_data <- read.csv("https://raw.githubusercontent.com/willoutcault/DATA621/master/homework5/wine-evaluation-data.csv",T,",")
+
+training_index <- training_data[,1] 
+training_data <- training_data[,-1]
+eval_index <- eval_data[,1]
+eval_data <- eval_data[,-c(1,2)]
+```
+
+## Summary Statistics
+Get an overview of raw data structure. 
+```{r echo=F}
+glimpse(training_data)
+```
+
+```{r echo=F, include=F}
+glimpse(eval_data)
+```
+
+All variables are numeric. `TARGET` is the response variable. The row index variable was removed. The remaining variables will be assessed for suitability as predictors in various regression models. There are 12,795 cases in the training dataset.
+
+
+```{r echo=F}
+summary(training_data)
+```
+
+```{r include=F}
+summary(eval_data)
+```
+
+Plot of missingness of dataset:
+
+```{r echo=F}
+vis_miss(training_data)
+```
+
+The summary statistics highlight several key concepts regarding the structure of the dataset.
+
+1. Missing values: the STARS variable has significant amount of missing values. Other variables with missing values include Alcohol, Sulphates, pH, Sulfur Dioxide, Free Sulfur Dioxide, Sugar and Chlorides. As will be shown in later sections, the presence of missing data seems to be a contributing factor for sales. Based on the size of the dataset, it is reasonable to infer that the included wineries are diverse in terms of geography and production scale. For a myriad of reasons, this means that not all wineries will have access to laboratory analysis and ratings from an expert which may negatively impact the ability to sell.   
+
+2. Negative values: Some variables contain unexpected negative values. In the Alcohol variable, for example, a negative value does not make physical sense in most commonly used units of measure (abv, proof). Since there is no information provided regarding the source of the data, or units of measurement to conduct the analysis, these values will be assumed to be correct.
+
+
+## Plots 
+A series of visualizations were used to reveal relationships between the target and predictors.
+
+### Density Plots
+The variables that have the strongest relationships with the target are: `LabelAppeal` and `STARS`. These two are also the only variables that are not based on chemical analysis of wine samples.
+
+```{r echo=F, warning=FALSE}
+training_data %>%
+  dplyr::select_if(is.numeric) %>% 
+  gather("attribute", "value", -TARGET) %>% 
+  ggplot(aes(x=value, fill=factor(TARGET)))+
+    geom_density(position = 'dodge', alpha=0.4)+ 
+    facet_wrap(~attribute, scales="free")
+```
+
+### Boxplots
+The dodged boxplot of each variable against the target variable highlights differences between target boxes which could mean the variable is useful for prediction. A dodged boxplot without overlapping boxes likely indicates a correlation in the value of the predictor variable to the target classes.
+
+```{r message=F, warning=F, echo=F}
+training_data %>% 
+  dplyr::select_if(is.numeric) %>% 
+  gather("attribute", "value", -TARGET) %>% 
+  ggplot(aes(x=value, fill=factor(TARGET))) +
+    geom_boxplot(position = 'dodge') + 
+    facet_wrap(~attribute, scales="free") +
+    theme(legend.title=element_blank())
+```
+
+### Correlation Matrix
+Once again, there seems to be weak predictive value with the chemical analysis. No variables are highly correlated to sales, however `STARS` and `LabelAppeal` do have some correlation. In addition, `AcidIndex` has some negative correlation with sales. `LabelAppeal` has some correlation with `STARS`. Perhaps wine experts are biased towards appearance rather than wine quality.
+
+```{r echo=FALSE, warning=F, message=F}
+library(GGally)
+ggcorr(training_data)
+```
+
+
+# Data Preparation
+
+Based on the data analysis done in the previous section, several steps will be taken to prepare the dataset for regression, including introduction of a new variable, handling of missing values, and datatype conversion.
+
+## New Variable
+The presence of a missing value could be influential to a buyer, causing them to not purchase cases from a supplier that cannot provide chemical analysis or expert rating. As discussed above, perhaps missing data means the wine manufacturer is not established, making the purchaser less likely to be receptive. 
+
+We notice the derived `established` variable does have a positive correlation with the target variable.
+
+```{r echo=F}
+has_NA <- colnames(training_data[apply(training_data, 2, anyNA)])
+in_testing <- !complete.cases(training_data[,has_NA[-length(has_NA)]])
+in_testing <- ifelse(in_testing==T, 1, 0)
+training_data$established <- ifelse(complete.cases(training_data), 4, 3)
+training_data$established <- ifelse(in_testing==T & !is.na(training_data$STARS), 3, training_data$established)
+training_data$established <- ifelse(in_testing==F & is.na(training_data$STARS), 2, training_data$established)
+training_data$established <- ifelse(in_testing==T & is.na(training_data$STARS), 1, training_data$established)
+
+# Create Variable for Eval Data
+in_testing <- !complete.cases(eval_data[,has_NA[-length(has_NA)]])
+in_testing <- ifelse(in_testing==T, 1, 0)
+eval_data$established <- ifelse(complete.cases(eval_data), 4, 3)
+eval_data$established <- ifelse(in_testing==T & !is.na(eval_data$STARS), 3, eval_data$established)
+eval_data$established <- ifelse(in_testing==F & is.na(eval_data$STARS), 2, eval_data$established)
+eval_data$established <- ifelse(in_testing==T & is.na(eval_data$STARS), 1, eval_data$established)
+
+# Visualize Training Data
+vis_cor(training_data)
+cor(training_data$TARGET,training_data$established)
+training_data %>% ggplot(aes(x=established, fill=TARGET))+
+  geom_bar()
+```
+
+## Replace Missing Values
+
+The `STARS` and `established` variables are treated as factors. The reason for `STARS` being a factor is because the missing values may have significance to the target variable therefore should be treated as its own value.
+
+Missing values were imputed using a predictive mean matching algorithm from the R `mice` package. The imputed data is then filled into both the training and evaluation sets.
+
+```{r echo=F, warning=F,message=F}
+training_data$STARS <- as.factor(training_data$STARS)
+eval_data$STARS <- as.factor(eval_data$STARS)
+
+training_data$established <- as.factor(training_data$established)
+eval_data$established <- as.factor(eval_data$established)
+
+temp_train_data <- mice(training_data,m=5,meth="pmm",maxit=10,seed=500,print=F,
+                        defaultMethod = c("pmm", "logreg", "polyreg", "polr"))
+temp_eval_data <- mice(eval_data,m=5,meth="pmm",maxit=10,seed=500,print=F,
+                       defaultMethod = c("pmm", "logreg", "polyreg", "polr"),)
+```
+
+```{r echo=F}
+clean_train_data <- complete(temp_train_data)
+clean_eval_data <- complete(temp_eval_data)
+```
+
+## Split into Train/Test
+
+The provided training dataset was split into a train and test set using an 80/20 split.
+
+```{r echo=F}
+set.seed(123)
+trainIndex <-createDataPartition(clean_train_data$TARGET, p = 0.8,list = FALSE,times = 1)
+train <- clean_train_data[trainIndex,]
+test <- clean_train_data[-trainIndex,]
+```
+
+
+# Build Models
+In this section, a series of models will be built and diagnostic metrics will be calculated. For each model a summary and brief analysis is provided. 
+
+## Poisson Model 1: Stepwise
+In the poisson model there is an assumption that the mean equals variance. The first model uses the generalized linear model family poisson and a stepwise selection algorithm to include only statistically significant coefficients in the model. 
+
+The model output shows deviance residuals are centered around 0 and are generally symmetrical around the median, which indicates a good fit. There are chemical variables included in the model which although are significant, have small coefficient values. The variables `STARS`, `established`, and `LabelAppeal` seem to be the best predictors, which is consistent with the visualizations from above. Overdispersion does not appear to be an issue with this poisson model as the value of sigma = Residual Deviance/Degrees of Freedom is near one(~0.977).
+
+```{r echo=F, warning=F}
+
+model1 = glm(TARGET ~ ., data = train, family = poisson) %>% stepAIC(trace=F, direction ='both')
+summary(model1)
+
+mu<-predict(model1, type = "response")
+
+
+# calculate AIC
+mod1AIC <- model1$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod1.predict.probs <- predict.glm(model1, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod1.predict.preds <- round(mod1.predict.probs)
+
+# now can use the caret function
+cm.var <- caret::confusionMatrix(factor(mod1.predict.preds), factor(test$TARGET), positive='1')
+#cm.var$table
+
+# print metrics
+mod1.CMmetrics <- c(cm.var$overall[c(1)], cm.var$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model1, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model1)) + 1 # '+1' is due to theta
+mod1.dispersion <- dispesion <-sum(E2^2) / (N - p)
+
+```
+
+## Poisson Model 2: Overdispersion
+In Poisson Model 1, residual deviance divided by degrees of freedom gives sigma which if greater than 1 means overdispersion. This means the standard errors cannot be trusted. In the next model, overdispersion is accounted for.  
+
+```{r echo=F, warning=F}
+model2 = glm(TARGET ~ LabelAppeal + established + STARS, data = train, family = quasipoisson) 
+summary(model2)
+
+# calculate AIC
+mod2AIC <- model2$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod2.predict.probs <- predict.glm(model2, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod2.predict.preds <- round(mod2.predict.probs)
+
+# now can use the caret function
+cm.var <- caret::confusionMatrix(factor(mod2.predict.preds), factor(test$TARGET), positive='1')
+#cm.var$table
+
+# print metrics
+mod2.CMmetrics <- c(cm.var$overall[c(1)], cm.var$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model2, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model2)) + 1 # '+1' is due to theta
+mod2.dispersion <- dispesion <-sum(E2^2) / (N - p)
+```
+
+## Poisson Model 3: Hurdle
+A hurdle model is used to account for the large presence of zeroes in the target and the subsequent deviance from a true poisson distribution. The hurdle model calculates different sets of coefficients for instances where the target equals zero and for instances where the target does not equal zero. The model output shows deviance residuals once again centered around 0, but this time with a right skew. There are two sets of coefficients, the first is for the positive-count process, the second is for the zero-count process.
+
+```{r echo=F, message=F, warning=F}
+# Hurdle regression
+library(pscl)
+model3 <- hurdle(TARGET ~ LabelAppeal + established + STARS, data=train, dist="poisson")
+summary(model3)
+
+# predict expected mean count
+mu<-predict(model3, type = "response")
+# sum the probabilities of a 0 count for each mean
+acc <- NA
+for(i in 1:9){
+  acc[i] <- round(sum(dpois(x=(i-1),lambda=mu)))/sum(train$TARGET == (i-1)) 
+}
+acc
+
+
+
+# calculate AIC
+mod3AIC <- model3$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod3.predict.probs <- predict(model3, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod3.predict.preds <- round(mod3.predict.probs)
+
+# now can use the caret function
+cm.var <- caret::confusionMatrix(factor(mod3.predict.preds), factor(test$TARGET), positive='1')
+#cm.var$table
+
+# print metrics
+mod3.CMmetrics <- c(cm.var$overall[c(1)], cm.var$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model3, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model3)) + 1 # '+1' is due to theta
+mod3.dispersion <- dispesion <-sum(E2^2) / (N - p)
+```
+
+## Binomial Model 1: Select Variables
+Negative binomial regression can be used for over-dispersed count data. The same predictors are used here that were used in the hurdle model and quasi-poisson model.
+
+As seen by the Residual Deviance to Degrees of Freedom ration, dispersion is effectively dealt with in this model. It also has relatively large coefficient values, especially when compared to corresponding standard errors. Once again residuals are centered around 0 and are symmetrical around the median value.  
+```{r echo=F, message=F, warning=F}
+library(MASS)
+model4 <- glm.nb(TARGET ~ LabelAppeal + established + STARS, data=train) 
+summary(model4)
+
+## AIC
+model4$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod4.predict.probs <- predict.glm(model4, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod4.predict.preds <- round(mod4.predict.probs)
+
+# now can use the caret function
+cm4 <- caret::confusionMatrix(factor(mod4.predict.preds), factor(test$TARGET), positive='1')
+# cm4$table
+
+# print metrics
+c(cm4$overall[c(1)], cm4$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model4, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model4)) + 1 # '+1' is due to theta
+sum(E2^2) / (N - p)
+```
+
+## Binomial Model 2: Expanded
+In the next binomial model, we expand on the previous negative binomial model by including some of the chemical variables. In particular, two of the variables relating to acid content appeared to be the best predictors considering the output from the stepwise poisson model.
+
+Comparing AIC scores of the two negative binomial distributions, we see some evidence that the extra variables that were added did not necessarily improve the quality of the model. Their coefficients are lower in magnitude, but do have statistically significant p-values. 
+
+```{r echo=F, warning=F, message=F}
+library(MASS)
+model5 <- glm.nb(TARGET ~ LabelAppeal + established + STARS + AcidIndex + VolatileAcidity + TotalSulfurDioxide, data=train)
+summary(model5)
+
+## AIC
+model5$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod5.predict.probs <- predict.glm(model5, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod5.predict.preds <- round(mod5.predict.probs)
+
+# now can use the caret function
+cm5 <- caret::confusionMatrix(factor(mod5.predict.preds), factor(test$TARGET), positive='1')
+#cm5$table
+
+# print metrics
+c(cm5$overall[c(1)], cm5$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model5, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model5)) + 1 # '+1' is due to theta
+sum(E2^2) / (N - p)
+```
+
+## Linear Model 1: Stepwise
+Next, multiple linear models are built. For the sake of comparison to generalized linear models, a stepwise model is built.
+
+We see a similar output in the linear model compared to the poisson model. Some of the variables have a marginally more important role in the linear model, namely `Chlorides` and `Alcohol`, but once again the major predictors are not the chemical variables. Label appeal, presence of missing information, and expert opinion seem to have a greater effect. The OLS diagnostic plots suggest a valid model with residuals constant variance with normal distribution and the effect of influential outliers appears minimal. A shortfall of OLS modelling for count data is in the range of predictions (shown below). OLS has negative predictions and also does not predict well towards the high end of counts.
+
+```{r echo=F, warning=F, message=F}
+library(ModelMetrics)
+model6 <- lm(TARGET ~ ., data = train) %>% stepAIC(direction = "both", trace=FALSE)
+summary(model6)
+
+par(mfrow = c(2, 2))
+plot(model6)
+
+#calculate RMSE 
+predictions <- predict.lm(model6, newdata = test[,-1])
+rmse(test[,1], predictions)
+
+# show range of predictions
+range(predictions)
+```
+
+## Linear Model 2: Select Variables
+The last model built is based on the non-chemical variables.
+
+As seen in the negative binomial models, removing the chemical variables does not seem to be detrimental to the model output. R-squared values and RMSE for the two linear models are very similar. The diagnostic plots suggest this is a valid model, as the assumption of linear regression are satisfied. Overall this model is preferable to the previous OLS model since it performs nearly as well using fewer predictors.
+
+```{r echo=F, warning=F, message=F}
+model7 <- lm(TARGET ~ LabelAppeal + established + STARS, data = train) 
+summary(model7)
+
+par(mfrow = c(2, 2))
+plot(model6)
+
+#calculate RMSE 
+predictions <- predict.lm(model7, newdata = test[,-1])
+rmse(test[,1], predictions)
+```
+
+# Select Model
+The 7 models developed above are evaluated for suitability and the best model will be used to make predictions on the evaluation dataset. In the previous section, each model was briefly analyzed based on its summary output. In this section models will be compared to each other based on accuracy of predictions and will be calculated based on the testing dataset in order to remove bias from the results. Other metrics such as RMSE, R-squared, and AIC are not applicable to each of the regression methods. 
+
+
+## Vuong tests for comparison
+A Vuong test is used to compare Poisson, Hurdle Poisson, and negative binomial regression models. Of the applicable models, the hurdle model performed the best in the Vuong testing. 
+
+Test1: stepwise Poisson vs. Hurdle
+```{r echo=F}
+vuong(model1, model3)
+```
+Test2: Hurdle vs binomial (select predictors)
+```{r echo=F}
+vuong(model3, model4)
+```
+Test3: Hurdle vs binomial (expanded predictors)
+```{r echo=F}
+vuong(model3, model5)
+```
+
+## Model Selection
+Based on the discussion of model outputs above and Vuong testing, the most appropriate model for the dataset is the Hurdle model:  
+
+This model is suitable for count data, accounts for high occurrence of zero-counts, and uses a small number of predictors to achieve similar performance to more complicated models. We found that chemical constituents of wine were not important to wine purchasers. Instead, labeling and expert opinion were much more valued. In addition, the absence of data seems to be important. We speculate that lack of data indicates a winery that is not established (or cannot prove that it is established), and this is a deterrent to the purchaser. 
+
+Now we are ready to write the predictions CSV file. Output of the hurdle model predictions is available in file `HW5_predictions.csv`.
+
+```{r echo=F,message=F,warning=F}
+pred <- predict(model3, newdata = clean_eval_data, type = "response")
+pred <- round(pred)
+predictions <- cbind(Prediction=pred, clean_eval_data)
+#write.csv(predictions, "HW5_predict.csv")
+```
+
+# Appendix
+```{r eval=F, message=F,warning=F}
+library(tidyverse)
+library(fastDummies)
+library(visdat)
+library(MASS)
+library(MLmetrics)
+library(caret)
+library(missForest)
+library(mice)
+library(pscl)
+library(AER)
+library(corrplot)
+```
+
+Data Exploration
+```{r eval=F, message=F,warning=F}
+training_data <- read.csv("https://raw.githubusercontent.com/willoutcault/DATA621/master/homework5/wine-training-data.csv",T,",")
+eval_data <- read.csv("https://raw.githubusercontent.com/willoutcault/DATA621/master/homework5/wine-evaluation-data.csv",T,",")
+
+training_index <- training_data[,1]
+training_data <- training_data[,-1]
+eval_index <- eval_data[,1]
+eval_data <- eval_data[,-c(1,2)]
+```
+
+Summary Statistics
+
+```{r eval=F, message=F,warning=F}
+glimpse(training_data)
+```
+
+```{r eval=F, message=F,warning=F}
+glimpse(eval_data)
+```
+
+
+```{r eval=F, message=F,warning=F}
+summary(training_data)
+```
+
+```{r eval=F, message=F,warning=F}
+summary(eval_data)
+```
+
+
+```{r eval=F, message=F,warning=F}
+vis_miss(training_data)
+```
+
+Plots
+Density Plots
+```{r eval=F, message=F,warning=F}
+training_data %>%
+  dplyr::select_if(is.numeric) %>%
+  gather("attribute", "value", -TARGET) %>%
+  ggplot(aes(x=value, fill=factor(TARGET)))+
+    geom_density(position = 'dodge', alpha=0.4)+
+    facet_wrap(~attribute, scales="free")
+```
+
+Boxplots
+
+```{r eval=F, message=F,warning=F}
+training_data %>%
+  dplyr::select_if(is.numeric) %>%
+  gather("attribute", "value", -TARGET) %>%
+  ggplot(aes(x=value, fill=factor(TARGET))) +
+    geom_boxplot(position = 'dodge') +
+    facet_wrap(~attribute, scales="free") +
+    theme(legend.title=element_blank())
+```
+
+Correlation Matrix
+
+```{r eval=F, message=F,warning=F}
+library(GGally)
+ggcorr(training_data)
+```
+
+
+Data Preparation
+
+
+
+New Variable
+```{r eval=F, message=F,warning=F}
+has_NA <- colnames(training_data[apply(training_data, 2, anyNA)])
+in_testing <- !complete.cases(training_data[,has_NA[-length(has_NA)]])
+in_testing <- ifelse(in_testing==T, 1, 0)
+training_data$established <- ifelse(complete.cases(training_data), 4, 3)
+training_data$established <- ifelse(in_testing==T & !is.na(training_data$STARS), 3, training_data$established)
+training_data$established <- ifelse(in_testing==F & is.na(training_data$STARS), 2, training_data$established)
+training_data$established <- ifelse(in_testing==T & is.na(training_data$STARS), 1, training_data$established)
+
+# Create Variable for Eval Data
+in_testing <- !complete.cases(eval_data[,has_NA[-length(has_NA)]])
+in_testing <- ifelse(in_testing==T, 1, 0)
+eval_data$established <- ifelse(complete.cases(eval_data), 4, 3)
+eval_data$established <- ifelse(in_testing==T & !is.na(eval_data$STARS), 3, eval_data$established)
+eval_data$established <- ifelse(in_testing==F & is.na(eval_data$STARS), 2, eval_data$established)
+eval_data$established <- ifelse(in_testing==T & is.na(eval_data$STARS), 1, eval_data$established)
+
+# Visualize Training Data
+vis_cor(training_data)
+cor(training_data$TARGET,training_data$established)
+training_data %>% ggplot(aes(x=established, fill=TARGET))+
+  geom_bar()
+```
+
+Replace Missing Values
+```{r eval=F, message=F,warning=F}
+training_data$STARS <- as.factor(training_data$STARS)
+eval_data$STARS <- as.factor(eval_data$STARS)
+
+training_data$established <- as.factor(training_data$established)
+eval_data$established <- as.factor(eval_data$established)
+
+temp_train_data <- mice(training_data,m=5,meth="pmm",maxit=10,seed=500,print=F,
+                        defaultMethod = c("pmm", "logreg", "polyreg", "polr"))
+temp_eval_data <- mice(eval_data,m=5,meth="pmm",maxit=10,seed=500,print=F,
+                       defaultMethod = c("pmm", "logreg", "polyreg", "polr"),)
+```
+
+```{r eval=F, message=F,warning=F}
+clean_train_data <- complete(temp_train_data)
+clean_eval_data <- complete(temp_eval_data)
+```
+
+Split into Train/Test
+```{r eval=F, message=F,warning=F}
+set.seed(123)
+trainIndex <-createDataPartition(clean_train_data$TARGET, p = 0.8,list = FALSE,times = 1)
+train <- clean_train_data[trainIndex,]
+test <- clean_train_data[-trainIndex,]
+```
+
+
+Build Models
+Poisson Model 1: Stepwise
+```{r eval=F, message=F,warning=F}
+
+model1 = glm(TARGET ~ ., data = train, family = poisson) %>% stepAIC(trace=F, direction ='both')
+summary(model1)
+
+mu<-predict(model1, type = "response")
+
+
+# calculate AIC
+mod1AIC <- model1$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod1.predict.probs <- predict.glm(model1, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod1.predict.preds <- round(mod1.predict.probs)
+
+# now can use the caret function
+cm.var <- caret::confusionMatrix(factor(mod1.predict.preds), factor(test$TARGET), positive='1')
+#cm.var$table
+
+# print metrics
+mod1.CMmetrics <- c(cm.var$overall[c(1)], cm.var$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model1, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model1)) + 1 # '+1' is due to theta
+mod1.dispersion <- dispesion <-sum(E2^2) / (N - p)
+
+```
+Poisson Model 2: Overdispersion
+```{r eval=F, message=F,warning=F}
+model2 = glm(TARGET ~ LabelAppeal + established + STARS, data = train, family = quasipoisson)
+summary(model2)
+
+# calculate AIC
+mod2AIC <- model2$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod2.predict.probs <- predict.glm(model2, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod2.predict.preds <- round(mod2.predict.probs)
+
+# now can use the caret function
+cm.var <- caret::confusionMatrix(factor(mod2.predict.preds), factor(test$TARGET), positive='1')
+#cm.var$table
+
+# print metrics
+mod2.CMmetrics <- c(cm.var$overall[c(1)], cm.var$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model2, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model2)) + 1 # '+1' is due to theta
+mod2.dispersion <- dispesion <-sum(E2^2) / (N - p)
+```
+
+Poisson Model 3: Hurdle
+```{r eval=F, message=F,warning=F}
+# Hurdle regression
+library(pscl)
+model3 <- hurdle(TARGET ~ LabelAppeal + established + STARS, data=train, dist="poisson")
+summary(model3)
+
+# predict expected mean count
+mu<-predict(model3, type = "response")
+# sum the probabilities of a 0 count for each mean
+acc <- NA
+for(i in 1:9){
+  acc[i] <- round(sum(dpois(x=(i-1),lambda=mu)))/sum(train$TARGET == (i-1))
+}
+acc
+
+
+
+# calculate AIC
+mod3AIC <- model3$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod3.predict.probs <- predict(model3, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod3.predict.preds <- round(mod3.predict.probs)
+
+# now can use the caret function
+cm.var <- caret::confusionMatrix(factor(mod3.predict.preds), factor(test$TARGET), positive='1')
+#cm.var$table
+
+# print metrics
+mod3.CMmetrics <- c(cm.var$overall[c(1)], cm.var$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model3, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model3)) + 1 # '+1' is due to theta
+mod3.dispersion <- dispesion <-sum(E2^2) / (N - p)
+```
+
+Binomial Model 1: Select Variables
+```{r eval=F, message=F,warning=F}
+library(MASS)
+model4 <- glm.nb(TARGET ~ LabelAppeal + established + STARS, data=train)
+summary(model4)
+
+## AIC
+model4$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod4.predict.probs <- predict.glm(model4, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod4.predict.preds <- round(mod4.predict.probs)
+
+# now can use the caret function
+cm4 <- caret::confusionMatrix(factor(mod4.predict.preds), factor(test$TARGET), positive='1')
+# cm4$table
+
+# print metrics
+c(cm4$overall[c(1)], cm4$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model4, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model4)) + 1 # '+1' is due to theta
+sum(E2^2) / (N - p)
+```
+
+Binomial Model 2: Expanded
+```{r eval=F, message=F,warning=F}
+library(MASS)
+model5 <- glm.nb(TARGET ~ LabelAppeal + established + STARS + AcidIndex + VolatileAcidity + TotalSulfurDioxide, data=train)
+summary(model5)
+
+## AIC
+model5$aic
+
+## use the test data set to make predicts and calculate metrics from the confusion matrix
+mod5.predict.probs <- predict.glm(model5, type="response", newdata=test)
+#glm_predict.full <- ifelse(glm_full.probs > 0.5, '1','0')
+attach(test)
+#table(glm_predict.full, test$TARGET_FLAG)
+
+mod5.predict.preds <- round(mod5.predict.probs)
+
+# now can use the caret function
+cm5 <- caret::confusionMatrix(factor(mod5.predict.preds), factor(test$TARGET), positive='1')
+#cm5$table
+
+# print metrics
+c(cm5$overall[c(1)], cm5$byClass[c(1,2,5,6,7)])
+
+# Dispersion Statistic
+E2 <- resid(model5, type = "pearson")
+N  <- nrow(train)
+p  <- length(coef(model5)) + 1 # '+1' is due to theta
+sum(E2^2) / (N - p)
+```
+
+Linear Model 1: Stepwise
+```{r eval=F, message=F,warning=F}
+library(ModelMetrics)
+model6 <- lm(TARGET ~ ., data = train) %>% stepAIC(direction = "both", trace=FALSE)
+summary(model6)
+
+par(mfrow = c(2, 2))
+plot(model6)
+
+#calculate RMSE
+predictions <- predict.lm(model6, newdata = test[,-1])
+rmse(test[,1], predictions)
+
+# show range of predictions
+range(predictions)
+```
+
+Linear Model 2: Select Variables
+```{r eval=F, message=F,warning=F}
+model7 <- lm(TARGET ~ LabelAppeal + established + STARS, data = train)
+summary(model7)
+
+par(mfrow = c(2, 2))
+plot(model6)
+
+#calculate RMSE
+predictions <- predict.lm(model7, newdata = test[,-1])
+rmse(test[,1], predictions)
+```
+Select Model
+Vuong tests for comparison
+
+Test1: stepwise Poisson vs. Hurdle
+```{r eval=F, message=F,warning=F}
+vuong(model1, model3)
+```
+Test2: Hurdle vs binomial(select predictors)
+```{r eval=F, message=F,warning=F}
+vuong(model3, model4)
+```
+Test3: Hurdle vs binomial(expanded predictors)
+```{r eval=F, message=F,warning=F}
+vuong(model3, model5)
+```
+
+Model Selection
+ `HW5_predictions.csv`.
+
+```{r eval=F, message=F,warning=F}
+pred <- predict(model3, newdata = clean_eval_data, type = "response")
+pred <- round(pred)
+predictions <- cbind(Prediction=pred, clean_eval_data)
+write.csv(predictions, "HW5_predict.csv")
+```
